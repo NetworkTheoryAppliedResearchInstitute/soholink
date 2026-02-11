@@ -1,0 +1,55 @@
+# FedAAA Configuration File for macOS
+# Copy this file to /usr/local/etc/fedaaa/config.yaml and customize
+
+# Server configuration
+server:
+  listen_address: "127.0.0.1:8080"
+  tls:
+    enabled: false
+    cert_file: "/usr/local/etc/fedaaa/certs/server.crt"
+    key_file: "/usr/local/etc/fedaaa/certs/server.key"
+
+# Database configuration
+database:
+  type: "sqlite"
+  path: "/usr/local/var/lib/fedaaa/fedaaa.db"
+
+# Storage configuration
+storage:
+  data_dir: "/usr/local/var/lib/fedaaa/data"
+  max_size_gb: 100
+
+# Logging
+logging:
+  level: "info"
+  format: "json"
+  output: "/usr/local/var/log/fedaaa/fedaaa.log"
+
+# P2P networking
+p2p:
+  enabled: true
+  listen_port: 9090
+  discovery:
+    mdns_enabled: true
+    bootstrap_nodes: []
+
+# Resource limits
+resources:
+  cpu_limit_percent: 80
+  memory_limit_gb: 16
+  storage_limit_gb: 100
+
+# Payment processors
+payment:
+  enabled: false
+
+# Auto-updates
+updates:
+  enabled: true
+  check_interval: "24h"
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9100

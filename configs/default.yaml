@@ -1,0 +1,127 @@
+node:
+  name: "soholink-node"
+  location: ""
+
+radius:
+  auth_address: "0.0.0.0:1812"
+  acct_address: "0.0.0.0:1813"
+  shared_secret: "testing123"
+
+auth:
+  credential_ttl: 3600
+  max_nonce_age: 300
+  clock_skew_tolerance: 300  # 5 minutes - allows for client/server clock drift
+
+storage:
+  base_path: ""
+
+policy:
+  directory: ""
+  default_policy: "default.rego"
+
+accounting:
+  rotation_interval: "24h"
+  compress_after_days: 7
+
+merkle:
+  batch_interval: "1h"
+
+logging:
+  level: "info"
+  format: "json"
+
+# Resource sharing subsystems (Phase 1+)
+resource_sharing:
+  enabled: false
+  http_api_address: "0.0.0.0:8080"
+  portal_address: "0.0.0.0:8081"
+
+  compute:
+    enabled: false
+    workers: 2
+    work_dir: ""
+    max_cpu_per_job: 4
+    max_memory_per_job: 8192
+    max_timeout: 3600
+
+  storage_pool:
+    enabled: false
+    base_dir: ""
+    max_file_size: 10737418240  # 10 GB
+    content_scanning: true
+    clamav_socket: "/var/run/clamav/clamd.ctl"
+
+  printer:
+    enabled: false
+    max_hotend_temp: 280
+    max_bed_temp: 110
+    max_feedrate: 15000
+    gcode_validation: true
+
+  portal:
+    enabled: false
+    session_timeout: 86400
+
+payment:
+  enabled: false
+  processors:
+    - type: barter
+      priority: 1
+      federation_only: true
+  offline_settlement_interval: "5m"
+  max_offline_queue: 1000
+
+lbtas:
+  enabled: false
+  rating_deadline: "48h"
+  timeout_check_interval: "1h"
+
+# Central SOHO operator subsystem (SaaS mode)
+central:
+  enabled: false
+  center_did: ""
+  transaction_fee_percent: 0.01  # 1% of net transaction value
+  capacity_check_interval: "5m"
+  cpu_alert_threshold: 0.80      # Alert at 80% CPU utilization
+  storage_alert_threshold: 0.80  # Alert at 80% storage utilization
+
+# P2P mesh fallback for thin clients
+p2p:
+  enabled: false
+  listen_addr: "0.0.0.0:9090"
+
+# Rental management (auto-accept engine)
+rental:
+  enabled: false
+
+# Elastic orchestration (FedScheduler)
+orchestration:
+  enabled: false
+  queue_size: 1000
+  scale_interval: "30s"
+
+# Managed services (PostgreSQL, S3, SQS)
+services:
+  enabled: false
+  postgres: true
+  object_store: true
+  message_queue: true
+
+# CDN edge caching
+cdn:
+  enabled: false
+  cache_capacity_mb: 512
+  default_ttl: "5m"
+
+# SLA management
+sla:
+  enabled: false
+  default_tier: "basic"
+  check_interval: "60s"
+
+# Hypervisor isolation (KVM/Hyper-V)
+hypervisor:
+  enabled: false
+  prefer_backend: "auto"  # "kvm", "hyperv", or "auto"
+  sev_default: false       # AMD Secure Encrypted Virtualization
+  tpm_default: false       # Trusted Platform Module

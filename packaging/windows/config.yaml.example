@@ -1,0 +1,63 @@
+# FedAAA Configuration File for Windows
+# Copy this file and customize for your deployment
+
+# Server configuration
+server:
+  listen_address: "127.0.0.1:8080"
+  tls:
+    enabled: false
+    cert_file: "C:\\Program Files\\FedAAA\\config\\server.crt"
+    key_file: "C:\\Program Files\\FedAAA\\config\\server.key"
+
+# Database configuration
+database:
+  type: "sqlite"
+  path: "C:\\Program Files\\FedAAA\\data\\fedaaa.db"
+
+# Storage configuration
+storage:
+  data_dir: "C:\\Program Files\\FedAAA\\data"
+  max_size_gb: 100
+
+# Logging
+logging:
+  level: "info"
+  format: "json"
+  output: "C:\\Program Files\\FedAAA\\logs\\fedaaa.log"
+
+# P2P networking
+p2p:
+  enabled: true
+  listen_port: 9090
+  discovery:
+    mdns_enabled: true
+    bootstrap_nodes: []
+
+# Resource limits
+resources:
+  cpu_limit_percent: 80
+  memory_limit_gb: 16
+  storage_limit_gb: 100
+
+# Payment processors
+payment:
+  enabled: false
+
+# Auto-updates
+updates:
+  enabled: true
+  check_interval: "24h"
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9100
+
+# Windows-specific settings
+windows:
+  service:
+    enabled: true
+    name: "FedAAA"
+    display_name: "FedAAA Resource Sharing Platform"
+    description: "Federated resource sharing and workload orchestration service"

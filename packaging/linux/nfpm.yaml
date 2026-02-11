@@ -1,0 +1,75 @@
+name: "fedaaa"
+arch: "amd64"
+platform: "linux"
+version: "${VERSION}"
+section: "net"
+priority: "optional"
+maintainer: "Network Theory Applied Research Institute"
+description: |
+  FedAAA - Federated Authentication, Authorization, and Accounting
+  A decentralized platform for resource sharing and workload orchestration.
+vendor: "Network Theory Applied Research Institute"
+homepage: "https://github.com/NetworkTheoryAppliedResearchInstitute/soholink"
+license: "TBD"
+
+contents:
+  # Binary
+  - src: dist/fedaaa-linux-amd64
+    dst: /usr/bin/fedaaa
+    file_info:
+      mode: 0755
+
+  # Systemd service
+  - src: packaging/linux/fedaaa.service
+    dst: /usr/lib/systemd/system/fedaaa.service
+    file_info:
+      mode: 0644
+
+  # Default config
+  - src: packaging/linux/config.yaml.example
+    dst: /etc/fedaaa/config.yaml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # Data directories
+  - dst: /var/lib/fedaaa
+    type: dir
+    file_info:
+      mode: 0755
+      owner: fedaaa
+      group: fedaaa
+
+  - dst: /var/log/fedaaa
+    type: dir
+    file_info:
+      mode: 0755
+      owner: fedaaa
+      group: fedaaa
+
+scripts:
+  preinstall: packaging/linux/scripts/preinstall.sh
+  postinstall: packaging/linux/scripts/postinstall.sh
+  preremove: packaging/linux/scripts/preremove.sh
+  postremove: packaging/linux/scripts/postremove.sh
+
+overrides:
+  deb:
+    depends:
+      - systemd
+      - docker.io | docker-ce
+    recommends:
+      - firecracker
+    suggests:
+      - redis
+      - postgresql
+
+  rpm:
+    depends:
+      - systemd
+      - docker
+    recommends:
+      - firecracker
+    suggests:
+      - redis
+      - postgresql

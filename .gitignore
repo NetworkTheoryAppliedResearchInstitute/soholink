@@ -1,0 +1,56 @@
+# Binaries
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+fedaaa
+fedaaa-*
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# Vendor directory (keep local, don't commit)
+/vendor/
+
+# Data directories
+/data/
+/merkle/
+*.db
+*.db-shm
+*.db-wal
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Configuration overrides
+config.local.yaml
+*.local.yaml
+
+# Logs
+*.log
+/logs/
+
+# Temporary files
+/tmp/
+*.tmp
+
+# Build artifacts
+*.tar.gz
+*.zip
+
+# OS specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini

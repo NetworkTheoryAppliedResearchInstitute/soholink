@@ -1,0 +1,35 @@
+alerts:
+  - name: compute_sandbox_escape_suspected
+    condition: rate(compute_jobs_failed{reason="seccomp_violation"}[5m]) > 0
+    severity: critical
+    action: isolate_node
+
+  - name: storage_malware_upload_spike
+    condition: rate(storage_malware_blocked[5m]) > 10
+    severity: high
+    action: notify_federation
+
+  - name: payment_settlement_failing
+    condition: payments_pending > 100
+    severity: medium
+    action: alert_operator
+
+  - name: portal_auth_bruteforce
+    condition: rate(portal_auth_failures{reason="invalid_credentials"}[1m]) > 20
+    severity: high
+    action: rate_limit_ip
+
+  - name: lbtas_dispute_spike
+    condition: rate(lbtas_disputes_total[1h]) > 10
+    severity: medium
+    action: alert_operator
+
+  - name: compute_queue_backlog
+    condition: compute_queue_size > 50
+    severity: medium
+    action: alert_operator
+
+  - name: storage_near_capacity
+    condition: storage_bytes_stored / storage_bytes_total > 0.9
+    severity: high
+    action: alert_operator

@@ -1,0 +1,78 @@
+# FedAAA Configuration File
+# Copy this file to /etc/fedaaa/config.yaml and customize
+
+# Server configuration
+server:
+  listen_address: "0.0.0.0:8080"
+  tls:
+    enabled: false
+    cert_file: "/etc/fedaaa/certs/server.crt"
+    key_file: "/etc/fedaaa/certs/server.key"
+
+# Database configuration
+database:
+  type: "sqlite"
+  path: "/var/lib/fedaaa/fedaaa.db"
+  # For PostgreSQL:
+  # type: "postgres"
+  # connection: "postgres://user:password@localhost:5432/fedaaa"
+
+# Storage configuration
+storage:
+  data_dir: "/var/lib/fedaaa/data"
+  max_size_gb: 100
+
+# Logging
+logging:
+  level: "info"
+  format: "json"
+  output: "/var/log/fedaaa/fedaaa.log"
+
+# P2P networking
+p2p:
+  enabled: true
+  listen_port: 9090
+  discovery:
+    mdns_enabled: true
+    bootstrap_nodes: []
+
+# Resource limits
+resources:
+  cpu_limit_percent: 80
+  memory_limit_gb: 16
+  storage_limit_gb: 100
+
+# Payment processors
+payment:
+  enabled: false
+  processors:
+    stripe:
+      enabled: false
+      secret_key: ""
+    lightning:
+      enabled: false
+      lnd_address: "localhost:10009"
+      macaroon_path: "/path/to/admin.macaroon"
+      tls_cert_path: "/path/to/tls.cert"
+
+# Auto-updates
+updates:
+  enabled: true
+  check_interval: "24h"
+  endpoint: "https://updates.example.com/releases.json"
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9100
+  metrics_retention: "30d"
+
+# Security
+security:
+  firewall:
+    enabled: true
+  seccomp:
+    enabled: true
+  apparmor:
+    enabled: true
