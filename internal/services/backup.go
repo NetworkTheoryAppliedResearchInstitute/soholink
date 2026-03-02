@@ -415,7 +415,7 @@ func (bm *BackupManager) BackupRedis(ctx context.Context, instance *ServiceInsta
 func (bm *BackupManager) ListBackups(instanceID string) ([]*Backup, error) {
 	instanceBackupDir := filepath.Join(bm.backupDir, instanceID)
 
-	if !fileExists(instanceBackupDir) {
+	if _, err := os.Stat(instanceBackupDir); os.IsNotExist(err) {
 		return []*Backup{}, nil
 	}
 

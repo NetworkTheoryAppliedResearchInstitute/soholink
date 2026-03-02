@@ -39,11 +39,9 @@ type MigrationConfig struct {
 	Mode MigrationMode
 
 	// MaxDowntimeMs is the maximum acceptable downtime in milliseconds
-	// Default: 100ms for precopy, 0 for postcopy
 	MaxDowntimeMs int
 
 	// MaxBandwidthMBps limits network bandwidth usage during migration
-	// Default: 1000 (1 Gbps)
 	MaxBandwidthMBps int
 
 	// AutoConverge enables CPU throttling if migration doesn't converge
@@ -81,11 +79,11 @@ type MigrationProgress struct {
 type MigrationStatus string
 
 const (
-	MigrationStatusSetup      MigrationStatus = "setup"
-	MigrationStatusActive     MigrationStatus = "active"
-	MigrationStatusCompleted  MigrationStatus = "completed"
-	MigrationStatusFailed     MigrationStatus = "failed"
-	MigrationStatusCancelled  MigrationStatus = "cancelled"
+	MigrationStatusSetup     MigrationStatus = "setup"
+	MigrationStatusActive    MigrationStatus = "active"
+	MigrationStatusCompleted MigrationStatus = "completed"
+	MigrationStatusFailed    MigrationStatus = "failed"
+	MigrationStatusCancelled MigrationStatus = "cancelled"
 )
 
 // MigrationManager handles live VM migrations.
@@ -106,34 +104,28 @@ func NewMigrationManager(source, destination Hypervisor) *MigrationManager {
 
 // Migrate performs a live migration of a VM.
 func (m *MigrationManager) Migrate(ctx context.Context, config *MigrationConfig) (*MigrationProgress, error) {
-	// Validate configuration
 	if err := m.validateConfig(config); err != nil {
 		return nil, fmt.Errorf("invalid migration config: %w", err)
 	}
 
-	// Set defaults
 	if config.MaxDowntimeMs == 0 {
-		config.MaxDowntimeMs = 100 // 100ms default
+		config.MaxDowntimeMs = 100
 	}
 	if config.MaxBandwidthMBps == 0 {
-		config.MaxBandwidthMBps = 1000 // 1 Gbps default
+		config.MaxBandwidthMBps = 1000
 	}
 
-	progress := &MigrationProgress{
-		Status: MigrationStatusSetup,
-	}
+	progress := &MigrationProgress{Status: MigrationStatusSetup}
 
-	// Check VM state
-	state, err := m.sourceHypervisor.GetState(config.SourceVMID)
+	state, err := m.sourceHypervisor.GetState(ctx, config.SourceVMID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VM state: %w", err)
 	}
 
-	if state != VMStateRunning && config.Mode != MigrationModeOffline {
+	if (state == nil || state.Status != "running") && config.Mode != MigrationModeOffline {
 		return nil, fmt.Errorf("VM must be running for live migration")
 	}
 
-	// Execute migration based on mode
 	switch config.Mode {
 	case MigrationModePrecopy:
 		return m.migratePrecopy(ctx, config, progress)
@@ -150,59 +142,50 @@ func (m *MigrationManager) Migrate(ctx context.Context, config *MigrationConfig)
 func (m *MigrationManager) migratePrecopy(ctx context.Context, config *MigrationConfig, progress *MigrationProgress) (*MigrationProgress, error) {
 	startTime := time.Now()
 
-	// Cast to KVM hypervisor for QMP access
 	kvmSource, ok := m.sourceHypervisor.(*KVMHypervisor)
 	if !ok {
 		return nil, fmt.Errorf("source hypervisor must be KVM for live migration")
 	}
 
-	// Step 1: Prepare destination
 	progress.Status = MigrationStatusSetup
 
-	// Get source VM configuration
 	kvmSource.mu.RLock()
 	sourceVM, exists := kvmSource.vms[config.SourceVMID]
 	if !exists {
 		kvmSource.mu.RUnlock()
 		return nil, ErrVMNotFound
 	}
-	vmConfig := sourceVM.config
 	qmpSocket := sourceVM.qmpSocket
 	kvmSource.mu.RUnlock()
 
-	// Step 2: Start migration listener on destination
 	listener, err := m.startMigrationListener(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start migration listener: %w", err)
 	}
 	defer listener.Close()
 
-	// Step 3: Configure migration parameters via QMP
 	qmp := NewQMPClient(qmpSocket)
 	if err := qmp.Connect(); err != nil {
 		return nil, fmt.Errorf("failed to connect to QMP: %w", err)
 	}
 	defer qmp.Close()
 
-	// Set migration capabilities
 	if err := m.setMigrationCapabilities(qmp, config); err != nil {
 		return nil, fmt.Errorf("failed to set migration capabilities: %w", err)
 	}
 
-	// Set migration parameters
 	params := map[string]interface{}{
-		"max-bandwidth":       config.MaxBandwidthMBps * 1024 * 1024, // Convert to bytes/s
-		"downtime-limit":      config.MaxDowntimeMs,
-		"compress-level":      9, // Max compression if enabled
-		"compress-threads":    4,
-		"decompress-threads":  2,
+		"max-bandwidth":      config.MaxBandwidthMBps * 1024 * 1024,
+		"downtime-limit":     config.MaxDowntimeMs,
+		"compress-level":     9,
+		"compress-threads":   4,
+		"decompress-threads": 2,
 	}
 
-	if err := qmp.Execute("migrate-set-parameters", params); err != nil {
+	if _, err := qmp.Execute("migrate-set-parameters", params); err != nil {
 		return nil, fmt.Errorf("failed to set migration parameters: %w", err)
 	}
 
-	// Step 4: Start migration
 	progress.Status = MigrationStatusActive
 
 	migrationURI := fmt.Sprintf("tcp:%s:%d", config.DestinationHost, m.migrationPort)
@@ -210,38 +193,30 @@ func (m *MigrationManager) migratePrecopy(ctx context.Context, config *Migration
 		migrationURI = fmt.Sprintf("tls:%s:%d", config.DestinationHost, m.migrationPort)
 	}
 
-	migrateParams := map[string]interface{}{
-		"uri": migrationURI,
-	}
-
-	if err := qmp.Execute("migrate", migrateParams); err != nil {
+	if _, err := qmp.Execute("migrate", map[string]interface{}{"uri": migrationURI}); err != nil {
 		return nil, fmt.Errorf("failed to start migration: %w", err)
 	}
 
-	// Step 5: Monitor migration progress
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Cancel migration
-			qmp.Execute("migrate_cancel", nil)
+			qmp.Execute("migrate_cancel", nil) //nolint:errcheck
 			progress.Status = MigrationStatusCancelled
 			return progress, ctx.Err()
 
 		case <-ticker.C:
-			// Query migration status
-			result, err := qmp.Execute("query-migrate", nil)
+			raw, err := qmp.Execute("query-migrate", nil)
 			if err != nil {
 				progress.Status = MigrationStatusFailed
 				progress.Error = err.Error()
 				return progress, err
 			}
 
-			// Parse migration status
-			statusMap, ok := result.(map[string]interface{})
-			if !ok {
+			var statusMap map[string]interface{}
+			if err := json.Unmarshal(raw, &statusMap); err != nil {
 				continue
 			}
 
@@ -251,14 +226,11 @@ func (m *MigrationManager) migratePrecopy(ctx context.Context, config *Migration
 			case "completed":
 				progress.Status = MigrationStatusCompleted
 				progress.ElapsedMs = int(time.Since(startTime).Milliseconds())
-
-				// Get final statistics
 				if stats, ok := statusMap["ram"].(map[string]interface{}); ok {
 					progress.TotalBytes = uint64(stats["total"].(float64))
 					progress.TransferredBytes = uint64(stats["transferred"].(float64))
 					progress.RemainingBytes = uint64(stats["remaining"].(float64))
 				}
-
 				return progress, nil
 
 			case "failed":
@@ -269,24 +241,20 @@ func (m *MigrationManager) migratePrecopy(ctx context.Context, config *Migration
 				return progress, fmt.Errorf("migration failed: %s", progress.Error)
 
 			case "active":
-				// Update progress
 				if stats, ok := statusMap["ram"].(map[string]interface{}); ok {
 					progress.TotalBytes = uint64(stats["total"].(float64))
 					progress.TransferredBytes = uint64(stats["transferred"].(float64))
 					progress.RemainingBytes = uint64(stats["remaining"].(float64))
 					progress.DirtyPages = uint64(stats["dirty-pages-rate"].(float64))
 
-					// Calculate bandwidth
 					elapsed := time.Since(startTime).Seconds()
 					if elapsed > 0 {
 						progress.BandwidthMBps = float64(progress.TransferredBytes) / elapsed / (1024 * 1024)
 					}
 				}
-
 				if downtime, ok := statusMap["expected-downtime"].(float64); ok {
 					progress.DowntimeMs = int(downtime)
 				}
-
 				progress.ElapsedMs = int(time.Since(startTime).Milliseconds())
 			}
 		}
@@ -295,7 +263,6 @@ func (m *MigrationManager) migratePrecopy(ctx context.Context, config *Migration
 
 // migratePostcopy performs post-copy live migration.
 func (m *MigrationManager) migratePostcopy(ctx context.Context, config *MigrationConfig, progress *MigrationProgress) (*MigrationProgress, error) {
-	// Start with precopy setup
 	startTime := time.Now()
 	progress.Status = MigrationStatusSetup
 
@@ -319,16 +286,13 @@ func (m *MigrationManager) migratePostcopy(ctx context.Context, config *Migratio
 	}
 	defer qmp.Close()
 
-	// Enable postcopy capability
-	postcopyParams := map[string]interface{}{
+	if _, err := qmp.Execute("migrate-set-capabilities", map[string]interface{}{
 		"capability": "postcopy-ram",
 		"state":      true,
-	}
-	if err := qmp.Execute("migrate-set-capabilities", postcopyParams); err != nil {
+	}); err != nil {
 		return nil, fmt.Errorf("failed to enable postcopy: %w", err)
 	}
 
-	// Start migration in precopy mode first
 	listener, err := m.startMigrationListener(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start migration listener: %w", err)
@@ -336,45 +300,38 @@ func (m *MigrationManager) migratePostcopy(ctx context.Context, config *Migratio
 	defer listener.Close()
 
 	migrationURI := fmt.Sprintf("tcp:%s:%d", config.DestinationHost, m.migrationPort)
-	migrateParams := map[string]interface{}{
-		"uri": migrationURI,
-	}
-
-	if err := qmp.Execute("migrate", migrateParams); err != nil {
+	if _, err := qmp.Execute("migrate", map[string]interface{}{"uri": migrationURI}); err != nil {
 		return nil, fmt.Errorf("failed to start migration: %w", err)
 	}
 
 	progress.Status = MigrationStatusActive
 
-	// Wait for precopy phase to transfer some memory, then switch to postcopy
 	time.Sleep(2 * time.Second)
 
-	// Switch to postcopy mode
-	if err := qmp.Execute("migrate-start-postcopy", nil); err != nil {
+	if _, err := qmp.Execute("migrate-start-postcopy", nil); err != nil {
 		return nil, fmt.Errorf("failed to start postcopy phase: %w", err)
 	}
 
-	// Monitor until completion
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			qmp.Execute("migrate_cancel", nil)
+			qmp.Execute("migrate_cancel", nil) //nolint:errcheck
 			progress.Status = MigrationStatusCancelled
 			return progress, ctx.Err()
 
 		case <-ticker.C:
-			result, err := qmp.Execute("query-migrate", nil)
+			raw, err := qmp.Execute("query-migrate", nil)
 			if err != nil {
 				progress.Status = MigrationStatusFailed
 				progress.Error = err.Error()
 				return progress, err
 			}
 
-			statusMap, ok := result.(map[string]interface{})
-			if !ok {
+			var statusMap map[string]interface{}
+			if err := json.Unmarshal(raw, &statusMap); err != nil {
 				continue
 			}
 
@@ -399,30 +356,21 @@ func (m *MigrationManager) migratePostcopy(ctx context.Context, config *Migratio
 func (m *MigrationManager) migrateOffline(ctx context.Context, config *MigrationConfig, progress *MigrationProgress) (*MigrationProgress, error) {
 	startTime := time.Now()
 
-	// Step 1: Stop source VM
 	progress.Status = MigrationStatusSetup
-	if err := m.sourceHypervisor.StopVM(config.SourceVMID); err != nil {
+	if err := m.sourceHypervisor.StopVM(ctx, config.SourceVMID); err != nil {
 		return nil, fmt.Errorf("failed to stop source VM: %w", err)
 	}
 
-	// Step 2: Create snapshot on source
-	snapshotPath, err := m.sourceHypervisor.Snapshot(config.SourceVMID, "migration")
-	if err != nil {
-		// Try to restart source VM
-		m.sourceHypervisor.StartVM(config.SourceVMID)
+	if err := m.sourceHypervisor.Snapshot(ctx, config.SourceVMID, "migration"); err != nil {
+		m.sourceHypervisor.StartVM(ctx, config.SourceVMID) //nolint:errcheck
 		return nil, fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	// Step 3: Transfer snapshot to destination
 	progress.Status = MigrationStatusActive
-	progress.TotalBytes = uint64(m.getSnapshotSize(snapshotPath))
+	// Size is 0 for simulation; real implementation queries the transferred path.
+	progress.TotalBytes = 0
 
-	// In production, this would use scp, rsync, or network transfer
-	// For now, we simulate the transfer
-	transferStartTime := time.Now()
-
-	// Simulate transfer with progress updates
-	chunkSize := uint64(10 * 1024 * 1024) // 10 MB chunks
+	chunkSize := uint64(10 * 1024 * 1024)
 	for progress.TransferredBytes < progress.TotalBytes {
 		select {
 		case <-ctx.Done():
@@ -435,43 +383,29 @@ func (m *MigrationManager) migrateOffline(ctx context.Context, config *Migration
 				progress.TransferredBytes = progress.TotalBytes
 			}
 			progress.RemainingBytes = progress.TotalBytes - progress.TransferredBytes
-
-			elapsed := time.Since(transferStartTime).Seconds()
-			if elapsed > 0 {
-				progress.BandwidthMBps = float64(progress.TransferredBytes) / elapsed / (1024 * 1024)
-			}
 		}
 	}
 
-	// Step 4: Restore on destination
-	// In production, this would restore from the transferred snapshot
-
 	progress.Status = MigrationStatusCompleted
 	progress.ElapsedMs = int(time.Since(startTime).Milliseconds())
-	progress.DowntimeMs = progress.ElapsedMs // Entire migration is downtime for offline
+	progress.DowntimeMs = progress.ElapsedMs
 
 	return progress, nil
 }
 
 // startMigrationListener starts a TCP listener for incoming migrations.
 func (m *MigrationManager) startMigrationListener(config *MigrationConfig) (net.Listener, error) {
-	address := fmt.Sprintf(":%d", m.migrationPort)
-
-	listener, err := net.Listen("tcp", address)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", m.migrationPort))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create listener: %w", err)
 	}
 
-	// Handle incoming migration connection in background
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-
-		// In production, this would handle the incoming VM state
-		// For now, we just receive and discard
 		io.Copy(io.Discard, conn)
 	}()
 
@@ -480,24 +414,20 @@ func (m *MigrationManager) startMigrationListener(config *MigrationConfig) (net.
 
 // setMigrationCapabilities configures QEMU migration capabilities.
 func (m *MigrationManager) setMigrationCapabilities(qmp *QMPClient, config *MigrationConfig) error {
-	capabilities := []map[string]interface{}{}
-
 	if config.AutoConverge {
-		capabilities = append(capabilities, map[string]interface{}{
+		if _, err := qmp.Execute("migrate-set-capabilities", map[string]interface{}{
 			"capability": "auto-converge",
 			"state":      true,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 
 	if config.CompressMemory {
-		capabilities = append(capabilities, map[string]interface{}{
+		if _, err := qmp.Execute("migrate-set-capabilities", map[string]interface{}{
 			"capability": "compress",
 			"state":      true,
-		})
-	}
-
-	for _, cap := range capabilities {
-		if err := qmp.Execute("migrate-set-capabilities", cap); err != nil {
+		}); err != nil {
 			return err
 		}
 	}
@@ -510,29 +440,16 @@ func (m *MigrationManager) validateConfig(config *MigrationConfig) error {
 	if config.SourceVMID == "" {
 		return fmt.Errorf("source VM ID is required")
 	}
-
 	if config.DestinationHost == "" && config.Mode != MigrationModeOffline {
 		return fmt.Errorf("destination host is required for live migration")
 	}
-
 	if config.Mode == "" {
-		config.Mode = MigrationModePrecopy // Default to precopy
+		config.Mode = MigrationModePrecopy
 	}
-
 	if config.TLSEnabled && (config.TLSCertPath == "" || config.TLSKeyPath == "") {
 		return fmt.Errorf("TLS cert and key paths required when TLS is enabled")
 	}
-
 	return nil
-}
-
-// getSnapshotSize returns the size of a snapshot file.
-func (m *MigrationManager) getSnapshotSize(path string) int64 {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0
-	}
-	return info.Size()
 }
 
 // MonitorMigration provides real-time updates on migration progress.
@@ -566,18 +483,17 @@ func (m *MigrationManager) MonitorMigration(ctx context.Context, vmID string, ca
 			return ctx.Err()
 
 		case <-ticker.C:
-			result, err := qmp.Execute("query-migrate", nil)
+			raw, err := qmp.Execute("query-migrate", nil)
 			if err != nil {
 				continue
 			}
 
-			statusMap, ok := result.(map[string]interface{})
-			if !ok {
+			var statusMap map[string]interface{}
+			if err := json.Unmarshal(raw, &statusMap); err != nil {
 				continue
 			}
 
 			progress := &MigrationProgress{}
-
 			status, _ := statusMap["status"].(string)
 			progress.Status = MigrationStatus(status)
 
@@ -594,4 +510,13 @@ func (m *MigrationManager) MonitorMigration(ctx context.Context, vmID string, ca
 			}
 		}
 	}
+}
+
+// getSnapshotSize returns the size of a snapshot file or 0 if unavailable.
+func (m *MigrationManager) getSnapshotSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }

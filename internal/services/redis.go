@@ -52,7 +52,7 @@ func (r *RedisProvisioner) Provision(ctx context.Context, req ProvisionRequest, 
 		"Cmd":   redisCmd,
 		"HostConfig": map[string]interface{}{
 			"Memory":   plan.MemoryMB * 1024 * 1024,
-			"NanoCpus": plan.CPU * 1000000000,
+			"NanoCpus": plan.CPUCores * 1e9,
 			"PortBindings": map[string][]map[string]string{
 				"6379/tcp": {{
 					"HostIp":   "0.0.0.0",

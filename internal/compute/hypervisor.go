@@ -99,7 +99,7 @@ func NewHypervisorManager() *HypervisorManager {
 
 	// Register all known backends
 	backends := []Hypervisor{
-		NewKVMHypervisor(),
+		NewKVMHypervisor("/var/lib/soholink/vms"),
 		NewHyperVHypervisor(),
 	}
 

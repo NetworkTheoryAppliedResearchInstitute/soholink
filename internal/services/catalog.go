@@ -230,6 +230,18 @@ func (c *Catalog) ListInstances(ownerDID string) []*ServiceInstance {
 	return result
 }
 
+// ListAllInstances returns all instances across all owners.
+func (c *Catalog) ListAllInstances() []*ServiceInstance {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make([]*ServiceInstance, 0, len(c.instances))
+	for _, inst := range c.instances {
+		result = append(result, inst)
+	}
+	return result
+}
+
 // GetPlans returns all available plans for a service type.
 func (c *Catalog) GetPlans(stype ServiceType) []ServicePlan {
 	c.mu.RLock()

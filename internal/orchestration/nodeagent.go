@@ -36,15 +36,15 @@ func NewNodeAgentClient(baseURL, authToken string) *NodeAgentClient {
 // DeployWorkload deploys a workload to a node.
 func (c *NodeAgentClient) DeployWorkload(ctx context.Context, workload *Workload) error {
 	deployReq := map[string]interface{}{
-		"workload_id":   workload.WorkloadID,
-		"image":         workload.Image,
-		"replicas":      1, // Single replica per node
-		"cpu":           workload.Resources.CPUCores,
-		"memory":        workload.Resources.MemoryMB,
-		"env":           workload.Env,
-		"ports":         workload.Ports,
-		"volumes":       workload.Volumes,
-		"restart_policy": workload.RestartPolicy,
+		"workload_id": workload.WorkloadID,
+		"image":       workload.Spec.Image,
+		"replicas":    1, // Single replica per node
+		"cpu":         workload.Spec.CPUCores,
+		"memory":      workload.Spec.MemoryMB,
+		"env":         workload.Spec.Environment,
+		"ports":       workload.Spec.Ports,
+		"disk_gb":     workload.Spec.DiskGB,
+		"max_retries": workload.Spec.MaxRetries,
 	}
 
 	resp, err := c.doRequest(ctx, "POST", "/api/workloads/deploy", deployReq)
@@ -267,95 +267,3 @@ type NodeMetrics struct {
 	Workloads []WorkloadNodeStatus `json:"workloads"`
 }
 
-// IntegrateNodeAgent integrates node agent calls into the scheduler.
-func (s *FedScheduler) scheduleWorkload(ctx context.Context, w *Workload) error {
-	// Find suitable nodes
-	nodes := s.discovery.GetAvailableNodes()
-	if len(nodes) == 0 {
-		return fmt.Errorf("no available nodes")
-	}
-
-	// Use placer to select best nodes
-	selectedNodes := s.placer.PlaceReplicas(w, nodes, w.Replicas)
-	if len(selectedNodes) < w.Replicas {
-		return fmt.Errorf("insufficient capacity: need %d replicas, found %d nodes", w.Replicas, len(selectedNodes))
-	}
-
-	// Create workload state
-	state := &WorkloadState{
-		WorkloadID: w.WorkloadID,
-		Status:     "deploying",
-		Replicas:   make(map[string]*ReplicaState),
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	// Deploy to each selected node
-	for i, node := range selectedNodes {
-		replicaID := fmt.Sprintf("%s-replica-%d", w.WorkloadID, i)
-
-		// Create node agent client
-		agentClient := NewNodeAgentClient(node.AgentURL, node.AuthToken)
-
-		// Deploy workload
-		if err := agentClient.DeployWorkload(ctx, w); err != nil {
-			// Mark replica as failed
-			state.Replicas[replicaID] = &ReplicaState{
-				ReplicaID: replicaID,
-				NodeID:    node.NodeID,
-				Status:    "failed",
-				Error:     err.Error(),
-				UpdatedAt: time.Now(),
-			}
-			continue
-		}
-
-		// Mark replica as running
-		state.Replicas[replicaID] = &ReplicaState{
-			ReplicaID: replicaID,
-			NodeID:    node.NodeID,
-			Status:    "running",
-			UpdatedAt: time.Now(),
-		}
-	}
-
-	// Update overall workload status
-	successCount := 0
-	for _, replica := range state.Replicas {
-		if replica.Status == "running" {
-			successCount++
-		}
-	}
-
-	if successCount == 0 {
-		state.Status = "failed"
-	} else if successCount < w.Replicas {
-		state.Status = "degraded"
-	} else {
-		state.Status = "running"
-	}
-
-	// Store workload state
-	s.mu.Lock()
-	s.ActiveWorkloads[w.WorkloadID] = state
-	s.mu.Unlock()
-
-	return nil
-}
-
-// ReplicaState represents the state of a single replica.
-type ReplicaState struct {
-	ReplicaID string
-	NodeID    string
-	Status    string
-	Error     string
-	UpdatedAt time.Time
-}
-
-// NodeInfo represents a federation node.
-type NodeInfo struct {
-	NodeID    string
-	AgentURL  string
-	AuthToken string
-	Capacity  *NodeCapacity
-}

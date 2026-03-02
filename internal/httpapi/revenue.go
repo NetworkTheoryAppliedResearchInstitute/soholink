@@ -105,15 +105,15 @@ func (s *Server) handleGetRevenueStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"total": total,
 		"periods": map[string]float64{
-			"last_24h": dayRevenue,
-			"last_7d":  weekRevenue,
-			"last_30d": monthRevenue,
+			"last_24h": float64(dayRevenue),
+			"last_7d":  float64(weekRevenue),
+			"last_30d": float64(monthRevenue),
 		},
 		"by_resource_type": map[string]float64{
-			"cpu":     cpuRevenue,
-			"memory":  memoryRevenue,
-			"storage": storageRevenue,
-			"gpu":     gpuRevenue,
+			"cpu":     float64(cpuRevenue),
+			"memory":  float64(memoryRevenue),
+			"storage": float64(storageRevenue),
+			"gpu":     float64(gpuRevenue),
 		},
 	})
 }
@@ -175,7 +175,7 @@ func (s *Server) handleRequestPayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Amount > pending {
+	if req.Amount > float64(pending) {
 		http.Error(w, "Insufficient pending balance", http.StatusBadRequest)
 		return
 	}

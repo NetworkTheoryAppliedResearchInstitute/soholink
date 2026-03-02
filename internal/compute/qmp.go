@@ -79,6 +79,12 @@ func (c *QMPClient) Execute(command string, args interface{}) (json.RawMessage, 
 	return resp.Return, nil
 }
 
+// Connect is a no-op. Execute opens a fresh per-command connection.
+func (c *QMPClient) Connect() error { return nil }
+
+// Close is a no-op. Execute closes connections after each command.
+func (c *QMPClient) Close() {}
+
 // SystemPowerdown sends ACPI shutdown signal.
 func (c *QMPClient) SystemPowerdown() error {
 	_, err := c.Execute("system_powerdown", nil)

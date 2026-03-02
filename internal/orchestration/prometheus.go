@@ -40,7 +40,7 @@ func (ope *OrchestratorPrometheusExporter) ServeHTTP(w http.ResponseWriter, r *h
 
 	statusCounts := make(map[string]int)
 	for _, workload := range ope.scheduler.ActiveWorkloads {
-		statusCounts[workload.Status]++
+		statusCounts[workload.Workload.Status]++
 	}
 
 	for status, count := range statusCounts {
@@ -50,7 +50,7 @@ func (ope *OrchestratorPrometheusExporter) ServeHTTP(w http.ResponseWriter, r *h
 	// Pending queue size
 	fmt.Fprintf(w, "# HELP soholink_workload_queue_size Workloads in pending queue\n")
 	fmt.Fprintf(w, "# TYPE soholink_workload_queue_size gauge\n")
-	fmt.Fprintf(w, "soholink_workload_queue_size %d\n", ope.scheduler.PendingQueue.Len())
+	fmt.Fprintf(w, "soholink_workload_queue_size %d\n", len(ope.scheduler.PendingQueue))
 
 	// Workload details
 	fmt.Fprintf(w, "# HELP soholink_workload_replicas_desired Desired replica count\n")
@@ -69,14 +69,15 @@ func (ope *OrchestratorPrometheusExporter) ServeHTTP(w http.ResponseWriter, r *h
 	fmt.Fprintf(w, "# TYPE soholink_workload_memory_requested_bytes gauge\n")
 
 	for _, workload := range ope.scheduler.ActiveWorkloads {
+		w0 := workload.Workload
 		labels := fmt.Sprintf(`workload_id="%s",name="%s",status="%s",type="%s"`,
-			workload.WorkloadID,
-			workload.Name,
-			workload.Status,
-			workload.Type,
+			w0.WorkloadID,
+			w0.Name,
+			w0.Status,
+			w0.Type,
 		)
 
-		fmt.Fprintf(w, "soholink_workload_replicas_desired{%s} %d\n", labels, workload.Replicas)
+		fmt.Fprintf(w, "soholink_workload_replicas_desired{%s} %d\n", labels, w0.Replicas)
 
 		// Count running and failed replicas
 		runningCount := 0
@@ -93,71 +94,68 @@ func (ope *OrchestratorPrometheusExporter) ServeHTTP(w http.ResponseWriter, r *h
 		fmt.Fprintf(w, "soholink_workload_replicas_failed{%s} %d\n", labels, failedCount)
 
 		// Resource requests
-		if workload.Resources.CPUCores > 0 {
-			fmt.Fprintf(w, "soholink_workload_cpu_requested{%s} %.2f\n", labels, workload.Resources.CPUCores)
+		if w0.Spec.CPUCores > 0 {
+			fmt.Fprintf(w, "soholink_workload_cpu_requested{%s} %.2f\n", labels, w0.Spec.CPUCores)
 		}
-		if workload.Resources.MemoryMB > 0 {
-			fmt.Fprintf(w, "soholink_workload_memory_requested_bytes{%s} %d\n", labels, workload.Resources.MemoryMB*1024*1024)
+		if w0.Spec.MemoryMB > 0 {
+			fmt.Fprintf(w, "soholink_workload_memory_requested_bytes{%s} %d\n", labels, w0.Spec.MemoryMB*1024*1024)
 		}
 
 		// Workload age
-		age := time.Since(workload.CreatedAt).Seconds()
+		age := time.Since(w0.CreatedAt).Seconds()
 		fmt.Fprintf(w, "# HELP soholink_workload_age_seconds Workload age in seconds\n")
 		fmt.Fprintf(w, "# TYPE soholink_workload_age_seconds gauge\n")
 		fmt.Fprintf(w, "soholink_workload_age_seconds{%s} %.0f\n", labels, age)
 	}
 
 	// Node metrics from discovery
-	if ope.scheduler.Discovery != nil {
-		nodes := ope.scheduler.Discovery.ListNodes()
+	nodes := ope.scheduler.discovery.ListNodes()
 
-		fmt.Fprintf(w, "# HELP soholink_nodes_total Total number of nodes by status\n")
-		fmt.Fprintf(w, "# TYPE soholink_nodes_total gauge\n")
+	fmt.Fprintf(w, "# HELP soholink_nodes_total Total number of nodes by status\n")
+	fmt.Fprintf(w, "# TYPE soholink_nodes_total gauge\n")
 
-		nodeStatusCounts := make(map[string]int)
-		for _, node := range nodes {
-			nodeStatusCounts[node.Status]++
-		}
+	nodeStatusCounts := make(map[string]int)
+	for _, node := range nodes {
+		nodeStatusCounts[node.Status]++
+	}
 
-		for status, count := range nodeStatusCounts {
-			fmt.Fprintf(w, "soholink_nodes_total{status=\"%s\"} %d\n", status, count)
-		}
+	for status, count := range nodeStatusCounts {
+		fmt.Fprintf(w, "soholink_nodes_total{status=\"%s\"} %d\n", status, count)
+	}
 
-		// Node capacity metrics
-		fmt.Fprintf(w, "# HELP soholink_node_cpu_capacity Total CPU cores\n")
-		fmt.Fprintf(w, "# TYPE soholink_node_cpu_capacity gauge\n")
+	// Node capacity metrics
+	fmt.Fprintf(w, "# HELP soholink_node_cpu_capacity Total CPU cores\n")
+	fmt.Fprintf(w, "# TYPE soholink_node_cpu_capacity gauge\n")
 
-		fmt.Fprintf(w, "# HELP soholink_node_memory_capacity_bytes Total memory in bytes\n")
-		fmt.Fprintf(w, "# TYPE soholink_node_memory_capacity_bytes gauge\n")
+	fmt.Fprintf(w, "# HELP soholink_node_memory_capacity_bytes Total memory in bytes\n")
+	fmt.Fprintf(w, "# TYPE soholink_node_memory_capacity_bytes gauge\n")
 
-		fmt.Fprintf(w, "# HELP soholink_node_cpu_available Available CPU cores\n")
-		fmt.Fprintf(w, "# TYPE soholink_node_cpu_available gauge\n")
+	fmt.Fprintf(w, "# HELP soholink_node_cpu_available Available CPU cores\n")
+	fmt.Fprintf(w, "# TYPE soholink_node_cpu_available gauge\n")
 
-		fmt.Fprintf(w, "# HELP soholink_node_memory_available_bytes Available memory in bytes\n")
-		fmt.Fprintf(w, "# TYPE soholink_node_memory_available_bytes gauge\n")
+	fmt.Fprintf(w, "# HELP soholink_node_memory_available_bytes Available memory in bytes\n")
+	fmt.Fprintf(w, "# TYPE soholink_node_memory_available_bytes gauge\n")
 
-		fmt.Fprintf(w, "# HELP soholink_node_workload_count Workloads running on node\n")
-		fmt.Fprintf(w, "# TYPE soholink_node_workload_count gauge\n")
+	fmt.Fprintf(w, "# HELP soholink_node_workload_count Active jobs on node\n")
+	fmt.Fprintf(w, "# TYPE soholink_node_workload_count gauge\n")
 
-		for _, node := range nodes {
-			labels := fmt.Sprintf(`node_id="%s",address="%s",status="%s"`,
-				node.NodeID,
-				node.Address,
-				node.Status,
-			)
+	for _, node := range nodes {
+		labels := fmt.Sprintf(`node_id="%s",address="%s",status="%s"`,
+			node.DID,
+			node.Address,
+			node.Status,
+		)
 
-			fmt.Fprintf(w, "soholink_node_cpu_capacity{%s} %.2f\n", labels, node.Capacity.CPUCores)
-			fmt.Fprintf(w, "soholink_node_memory_capacity_bytes{%s} %d\n", labels, node.Capacity.MemoryMB*1024*1024)
-			fmt.Fprintf(w, "soholink_node_cpu_available{%s} %.2f\n", labels, node.Available.CPUCores)
-			fmt.Fprintf(w, "soholink_node_memory_available_bytes{%s} %d\n", labels, node.Available.MemoryMB*1024*1024)
-			fmt.Fprintf(w, "soholink_node_workload_count{%s} %d\n", labels, len(node.Workloads))
+		fmt.Fprintf(w, "soholink_node_cpu_capacity{%s} %.2f\n", labels, node.TotalCPU)
+		fmt.Fprintf(w, "soholink_node_memory_capacity_bytes{%s} %d\n", labels, node.TotalMemoryMB*1024*1024)
+		fmt.Fprintf(w, "soholink_node_cpu_available{%s} %.2f\n", labels, node.AvailableCPU)
+		fmt.Fprintf(w, "soholink_node_memory_available_bytes{%s} %d\n", labels, node.AvailableMemoryMB*1024*1024)
 
-			// Node last heartbeat
-			lastHeartbeat := time.Since(node.LastHeartbeat).Seconds()
-			fmt.Fprintf(w, "# HELP soholink_node_last_heartbeat_seconds Seconds since last heartbeat\n")
-			fmt.Fprintf(w, "# TYPE soholink_node_last_heartbeat_seconds gauge\n")
-			fmt.Fprintf(w, "soholink_node_last_heartbeat_seconds{%s} %.0f\n", labels, lastHeartbeat)
-		}
+		// Node last heartbeat
+		lastHeartbeat := time.Since(node.LastHeartbeat).Seconds()
+		fmt.Fprintf(w, "# HELP soholink_node_last_heartbeat_seconds Seconds since last heartbeat\n")
+		fmt.Fprintf(w, "# TYPE soholink_node_last_heartbeat_seconds gauge\n")
+		fmt.Fprintf(w, "soholink_node_last_heartbeat_seconds{%s} %.0f\n", labels, lastHeartbeat)
 	}
 
 	// Scheduler statistics

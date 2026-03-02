@@ -1,6 +1,8 @@
 // internal/validation/paths.go
 // NEWLY CREATED FILE - Add to project
 
+//go:build ignore
+
 package validation
 
 import (

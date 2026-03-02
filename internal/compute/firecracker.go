@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,22 @@ import (
 	"sync"
 	"time"
 )
+
+// fcVMState is the internal running/stopped flag for a Firecracker microVM.
+type fcVMState string
+
+const (
+	fcVMStateStopped fcVMState = "stopped"
+	fcVMStateRunning fcVMState = "running"
+)
+
+// ErrVMNotFound is returned when a VM ID is not in the hypervisor registry.
+var ErrVMNotFound = errors.New("VM not found")
+
+// generateVMID creates a unique ID for a new Firecracker VM.
+func generateVMID() string {
+	return fmt.Sprintf("fcvm-%d", time.Now().UnixNano())
+}
 
 // FirecrackerHypervisor implements the Hypervisor interface using Firecracker microVMs.
 // Firecracker provides lightweight virtualization with fast boot times (<125ms)
@@ -30,7 +47,7 @@ type FirecrackerVM struct {
 	Config      *VMConfig
 	Process     *exec.Cmd
 	SocketPath  string
-	State       VMState
+	State       fcVMState
 	CreatedAt   time.Time
 	httpClient  *http.Client
 }
@@ -66,7 +83,7 @@ func (f *FirecrackerHypervisor) CreateVM(config *VMConfig) (string, error) {
 
 	// Create root filesystem (ext4 image)
 	rootfsPath := filepath.Join(vmDir, "rootfs.ext4")
-	if err := f.createRootfs(rootfsPath, config.Disk); err != nil {
+	if err := f.createRootfs(rootfsPath, int(config.DiskGB)); err != nil {
 		return "", fmt.Errorf("failed to create rootfs: %w", err)
 	}
 
@@ -77,7 +94,7 @@ func (f *FirecrackerHypervisor) CreateVM(config *VMConfig) (string, error) {
 		ID:         vmID,
 		Config:     config,
 		SocketPath: socketPath,
-		State:      VMStateStopped,
+		State:      fcVMStateStopped,
 		CreatedAt:  time.Now(),
 		httpClient: &http.Client{
 			Transport: &http.Transport{
@@ -104,7 +121,7 @@ func (f *FirecrackerHypervisor) StartVM(vmID string) error {
 		return ErrVMNotFound
 	}
 
-	if vm.State == VMStateRunning {
+	if vm.State == fcVMStateRunning {
 		return nil // Already running
 	}
 
@@ -141,8 +158,8 @@ func (f *FirecrackerHypervisor) StartVM(vmID string) error {
 
 	// Configure machine resources
 	machineConfig := map[string]interface{}{
-		"vcpu_count":   vm.Config.CPU,
-		"mem_size_mib": vm.Config.Memory,
+		"vcpu_count":   vm.Config.CPUCores,
+		"mem_size_mib": vm.Config.MemoryMB,
 		"smt":          false, // Disable simultaneous multithreading for security
 	}
 
@@ -204,14 +221,14 @@ func (f *FirecrackerHypervisor) StartVM(vmID string) error {
 		return fmt.Errorf("failed to start instance: %w", err)
 	}
 
-	vm.State = VMStateRunning
+	vm.State = fcVMStateRunning
 
 	// Monitor process in background
 	go func() {
 		cmd.Wait()
 		f.mu.Lock()
 		if v, exists := f.vms[vmID]; exists {
-			v.State = VMStateStopped
+			v.State = fcVMStateStopped
 		}
 		f.mu.Unlock()
 	}()
@@ -229,7 +246,7 @@ func (f *FirecrackerHypervisor) StopVM(vmID string) error {
 		return ErrVMNotFound
 	}
 
-	if vm.State != VMStateRunning {
+	if vm.State != fcVMStateRunning {
 		return nil // Already stopped
 	}
 
@@ -253,7 +270,7 @@ func (f *FirecrackerHypervisor) StopVM(vmID string) error {
 		}
 	}
 
-	vm.State = VMStateStopped
+	vm.State = fcVMStateStopped
 	return nil
 }
 
@@ -267,7 +284,7 @@ func (f *FirecrackerHypervisor) DestroyVM(vmID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	vm, ok := f.vms[vmID]
+	_, ok := f.vms[vmID]
 	if !ok {
 		return ErrVMNotFound
 	}
@@ -287,13 +304,13 @@ func (f *FirecrackerHypervisor) DestroyVM(vmID string) error {
 }
 
 // GetState returns the current state of a VM.
-func (f *FirecrackerHypervisor) GetState(vmID string) (VMState, error) {
+func (f *FirecrackerHypervisor) GetState(vmID string) (fcVMState, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
 	vm, ok := f.vms[vmID]
 	if !ok {
-		return VMStateStopped, ErrVMNotFound
+		return fcVMStateStopped, ErrVMNotFound
 	}
 
 	return vm.State, nil
@@ -322,7 +339,7 @@ func (f *FirecrackerHypervisor) Snapshot(vmID string, snapshotName string) (stri
 		return "", ErrVMNotFound
 	}
 
-	if vm.State != VMStateRunning {
+	if vm.State != fcVMStateRunning {
 		return "", fmt.Errorf("VM must be running to snapshot")
 	}
 

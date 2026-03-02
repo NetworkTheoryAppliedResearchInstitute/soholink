@@ -1,15 +1,11 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -46,7 +42,7 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, req ProvisionReques
 		},
 		"HostConfig": map[string]interface{}{
 			"Memory":     plan.MemoryMB * 1024 * 1024,
-			"NanoCpus":   plan.CPU * 1000000000,
+			"NanoCpus":   plan.CPUCores * 1e9,
 			"PortBindings": map[string][]map[string]string{
 				"5432/tcp": {{
 					"HostIp":   "0.0.0.0",

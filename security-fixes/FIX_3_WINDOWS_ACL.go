@@ -1,7 +1,7 @@
 // internal/did/keygen_windows.go
 // NEWLY CREATED FILE - Windows-specific key file security
 
-//go:build windows
+//go:build ignore
 
 package did
 

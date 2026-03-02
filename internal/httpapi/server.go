@@ -294,7 +294,7 @@ type SubmitWorkloadRequest struct {
 	WorkloadID string                       `json:"workload_id"`
 	Replicas   int                          `json:"replicas"`
 	Spec       orchestration.WorkloadSpec   `json:"spec"`
-	Constraints orchestration.Constraints   `json:"constraints,omitempty"`
+	Constraints orchestration.PlacementConstraints   `json:"constraints,omitempty"`
 }
 
 // SubmitWorkloadResponse is the JSON response for workload submission.
@@ -394,12 +394,12 @@ func (s *Server) handleWorkloadStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := WorkloadStatusResponse{
-		WorkloadID: state.WorkloadID,
-		Status:     state.Status,
-		Replicas:   state.DesiredReplicas,
+		WorkloadID: state.Workload.WorkloadID,
+		Status:     state.Workload.Status,
+		Replicas:   state.Workload.Replicas,
 		Placements: state.Placements,
-		CreatedAt:  state.CreatedAt,
-		UpdatedAt:  state.UpdatedAt,
+		CreatedAt:  state.Workload.CreatedAt,
+		UpdatedAt:  state.Workload.UpdatedAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

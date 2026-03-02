@@ -94,8 +94,9 @@ func (cpe *ComputePrometheusExporter) collectMetrics(ctx context.Context) {
 	defer cpe.mu.Unlock()
 
 	// Collect VM metrics
-	vms := cpe.hypervisor.ListVMs()
-	for _, vmID := range vms {
+	vms, _ := cpe.hypervisor.ListVMs(ctx)
+	for _, vm := range vms {
+		vmID := vm.VMID
 		metrics := cpe.collectVMMetrics(ctx, vmID)
 		if metrics != nil {
 			cpe.vmMetrics[vmID] = metrics
@@ -130,16 +131,18 @@ func (cpe *ComputePrometheusExporter) collectMetrics(ctx context.Context) {
 
 // collectVMMetrics collects metrics for a single VM.
 func (cpe *ComputePrometheusExporter) collectVMMetrics(ctx context.Context, vmID string) *VMMetrics {
-	// Get VM info
-	info, err := cpe.hypervisor.GetVMInfo(vmID)
-	if err != nil {
+	info, err := cpe.hypervisor.GetState(ctx, vmID)
+	if err != nil || info == nil {
 		return nil
 	}
 
 	metrics := &VMMetrics{
 		VMID:          vmID,
-		State:         info.State,
-		MemoryTotalMB: info.MemoryMB,
+		State:         info.Status,
+		CPUUsagePercent: info.CPUUsage,
+		MemoryUsedMB:  info.MemoryUsed / (1024 * 1024),
+		MemoryTotalMB: info.MemoryUsed / (1024 * 1024),
+		Uptime:        info.Uptime,
 	}
 
 	// TODO: Collect actual runtime metrics from hypervisor

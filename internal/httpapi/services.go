@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"strconv"
+	"time"
 	"fmt"
 	"net/http"
 	"strings"
@@ -62,7 +64,7 @@ func (s *Server) handleProvisionService(w http.ResponseWriter, r *http.Request) 
 		services.ServiceTypeMongoDB,
 		services.ServiceTypeRedis,
 		services.ServiceTypeObjectStore,
-		services.ServiceTypeQueue,
+		services.ServiceTypeMessageQueue,
 	}
 
 	valid := false
@@ -79,8 +81,8 @@ func (s *Server) handleProvisionService(w http.ResponseWriter, r *http.Request) 
 	}
 
 	provisionReq := services.ProvisionRequest{
-		InstanceID: fmt.Sprintf("%s-%d", req.ServiceType, time.Now().Unix()),
-		PlanID:     req.PlanID,
+		Name: fmt.Sprintf("%s-%d", req.ServiceType, time.Now().Unix()),
+		Plan:   req.PlanID,
 		Config:     req.Config,
 	}
 
@@ -140,7 +142,7 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		"service_type":      instance.ServiceType,
 		"status":            instance.Status,
 		"endpoint":          instance.Endpoint,
-		"connection_string": instance.Credentials["connection_string"],
+		"connection_string": instance.Credentials.Token,
 		"credentials":       instance.Credentials,
 		"config":            instance.Config,
 		"created_at":        instance.CreatedAt,
@@ -263,8 +265,8 @@ func (s *Server) handleRestartService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	provisionReq := services.ProvisionRequest{
-		InstanceID: instanceID,
-		PlanID:     instance.PlanID,
+		Name: instance.Name,
+		Plan: instance.Plan,
 		Config:     instance.Config,
 	}
 

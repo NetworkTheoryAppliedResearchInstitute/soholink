@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestration"
 )
 
 // handleListWorkloads returns all workloads (GET /api/workloads)
@@ -340,7 +339,7 @@ func (s *Server) routeWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workloadID := parts[0]
+	_ = parts[0]
 
 	// Handle sub-resources
 	if len(parts) > 1 {

@@ -217,14 +217,14 @@ func (a *App) initResourceSharing(cfg *config.Config) error {
 	for _, pc := range cfg.Payment.Processors {
 		switch pc.Type {
 		case "barter":
-			processors = append(processors, payment.NewBarterProcessor(pc.FederationOnly))
+			processors = append(processors, payment.NewBarterProcessor(a.Store, pc.FederationOnly))
 		case "stripe":
 			secretKey := os.Getenv(pc.SecretKeyEnv)
 			processors = append(processors, payment.NewStripeProcessor(secretKey, ""))
 		case "lightning":
 			processors = append(processors, payment.NewLightningProcessor(pc.LNDHost, ""))
 		case "federation_token":
-			processors = append(processors, payment.NewFederationTokenProcessor(pc.Contract, ""))
+			processors = append(processors, payment.NewFederationTokenProcessor(a.Store, pc.Contract, ""))
 		}
 	}
 	a.PaymentLedger = payment.NewLedger(a.Store, processors)
@@ -358,13 +358,13 @@ func (a *App) initManagedServices(cfg *config.Config) {
 	a.ServiceCatalog = services.NewCatalog(a.Store)
 
 	if cfg.Services.Postgres {
-		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypePostgres, services.NewPostgresProvisioner())
+		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypePostgres, services.NewPostgresProvisioner("unix:///var/run/docker.sock"))
 	}
 	if cfg.Services.ObjectStore {
-		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypeObjectStore, services.NewObjectStoreProvisioner())
+		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypeObjectStore, services.NewObjectStoreProvisioner("unix:///var/run/docker.sock"))
 	}
 	if cfg.Services.MessageQueue {
-		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypeMessageQueue, services.NewQueueProvisioner())
+		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypeMessageQueue, services.NewQueueProvisioner("unix:///var/run/docker.sock"))
 	}
 	log.Printf("[app] managed services catalog initialized")
 }

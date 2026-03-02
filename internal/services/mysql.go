@@ -46,7 +46,7 @@ func (m *MySQLProvisioner) Provision(ctx context.Context, req ProvisionRequest, 
 		},
 		"HostConfig": map[string]interface{}{
 			"Memory":   plan.MemoryMB * 1024 * 1024,
-			"NanoCpus": plan.CPU * 1000000000,
+			"NanoCpus": plan.CPUCores * 1e9,
 			"PortBindings": map[string][]map[string]string{
 				"3306/tcp": {{
 					"HostIp":   "0.0.0.0",

@@ -91,6 +91,17 @@ func (d *NodeDiscovery) refresh(ctx context.Context) {
 	d.nodes = fresh
 }
 
+// ListNodes returns a snapshot of all known nodes.
+func (d *NodeDiscovery) ListNodes() []*Node {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	result := make([]*Node, 0, len(d.nodes))
+	for _, n := range d.nodes {
+		result = append(result, n)
+	}
+	return result
+}
+
 func (d *NodeDiscovery) matchesQuery(node *Node, q NodeQuery) bool {
 	if node.Status != "online" {
 		return false

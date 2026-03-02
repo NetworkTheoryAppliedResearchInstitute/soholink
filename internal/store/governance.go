@@ -49,7 +49,7 @@ func (s *Store) InitGovernanceSchema(ctx context.Context) error {
 	return err
 }
 
-// GovernanceProposal represents a governance proposal (for store operations).
+// GovernanceProposal represents a governance proposal in the store.
 type GovernanceProposal struct {
 	ProposalID   string
 	ProposerDID  string
@@ -69,7 +69,7 @@ type GovernanceProposal struct {
 	ExecutedAt   *time.Time
 }
 
-// GovernanceVote represents a vote on a proposal (for store operations).
+// GovernanceVote represents a vote on a proposal in the store.
 type GovernanceVote struct {
 	VoteID     string
 	ProposalID string
@@ -80,43 +80,11 @@ type GovernanceVote struct {
 }
 
 // CreateGovernanceProposal inserts a new governance proposal.
-func (s *Store) CreateGovernanceProposal(ctx context.Context, p interface{}) error {
-	// Accept both governance.Proposal and GovernanceProposal
-	var proposal GovernanceProposal
-	switch v := p.(type) {
-	case *GovernanceProposal:
-		proposal = *v
-	case GovernanceProposal:
-		proposal = v
-	default:
-		// Use reflection to extract fields from governance.Proposal
-		// This is a simplified version - in production you'd use proper type conversion
-		proposal = GovernanceProposal{
-			ProposalID:   getField(p, "ProposalID").(string),
-			ProposerDID:  getField(p, "ProposerDID").(string),
-			Title:        getField(p, "Title").(string),
-			Description:  getField(p, "Description").(string),
-			ProposalType: getFieldString(p, "ProposalType"),
-			State:        getFieldString(p, "State"),
-			VotingStart:  getField(p, "VotingStart").(time.Time),
-			VotingEnd:    getField(p, "VotingEnd").(time.Time),
-			QuorumPct:    getField(p, "QuorumPct").(int),
-			PassPct:      getField(p, "PassPct").(int),
-			YesVotes:     getField(p, "YesVotes").(int),
-			NoVotes:      getField(p, "NoVotes").(int),
-			AbstainVotes: getField(p, "AbstainVotes").(int),
-			CreatedAt:    getField(p, "CreatedAt").(time.Time),
-			UpdatedAt:    getField(p, "UpdatedAt").(time.Time),
-		}
-		if execAt := getFieldTimePtr(p, "ExecutedAt"); execAt != nil {
-			proposal.ExecutedAt = execAt
-		}
-	}
-
+func (s *Store) CreateGovernanceProposal(ctx context.Context, p *GovernanceProposal) error {
 	var executedAt sql.NullInt64
-	if proposal.ExecutedAt != nil {
+	if p.ExecutedAt != nil {
 		executedAt.Valid = true
-		executedAt.Int64 = proposal.ExecutedAt.Unix()
+		executedAt.Int64 = p.ExecutedAt.Unix()
 	}
 
 	_, err := s.db.ExecContext(ctx,
@@ -125,43 +93,22 @@ func (s *Store) CreateGovernanceProposal(ctx context.Context, p interface{}) err
 			state, voting_start, voting_end, quorum_pct, pass_pct,
 			yes_votes, no_votes, abstain_votes, created_at, updated_at, executed_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		proposal.ProposalID, proposal.ProposerDID, proposal.Title, proposal.Description,
-		proposal.ProposalType, proposal.State,
-		proposal.VotingStart.Unix(), proposal.VotingEnd.Unix(),
-		proposal.QuorumPct, proposal.PassPct,
-		proposal.YesVotes, proposal.NoVotes, proposal.AbstainVotes,
-		proposal.CreatedAt.Unix(), proposal.UpdatedAt.Unix(), executedAt,
+		p.ProposalID, p.ProposerDID, p.Title, p.Description,
+		p.ProposalType, p.State,
+		p.VotingStart.Unix(), p.VotingEnd.Unix(),
+		p.QuorumPct, p.PassPct,
+		p.YesVotes, p.NoVotes, p.AbstainVotes,
+		p.CreatedAt.Unix(), p.UpdatedAt.Unix(), executedAt,
 	)
 	return err
 }
 
 // UpdateGovernanceProposal updates an existing governance proposal.
-func (s *Store) UpdateGovernanceProposal(ctx context.Context, p interface{}) error {
-	// Similar conversion logic as CreateGovernanceProposal
-	var proposal GovernanceProposal
-	switch v := p.(type) {
-	case *GovernanceProposal:
-		proposal = *v
-	case GovernanceProposal:
-		proposal = v
-	default:
-		proposal = GovernanceProposal{
-			ProposalID:   getField(p, "ProposalID").(string),
-			State:        getFieldString(p, "State"),
-			YesVotes:     getField(p, "YesVotes").(int),
-			NoVotes:      getField(p, "NoVotes").(int),
-			AbstainVotes: getField(p, "AbstainVotes").(int),
-			UpdatedAt:    getField(p, "UpdatedAt").(time.Time),
-		}
-		if execAt := getFieldTimePtr(p, "ExecutedAt"); execAt != nil {
-			proposal.ExecutedAt = execAt
-		}
-	}
-
+func (s *Store) UpdateGovernanceProposal(ctx context.Context, p *GovernanceProposal) error {
 	var executedAt sql.NullInt64
-	if proposal.ExecutedAt != nil {
+	if p.ExecutedAt != nil {
 		executedAt.Valid = true
-		executedAt.Int64 = proposal.ExecutedAt.Unix()
+		executedAt.Int64 = p.ExecutedAt.Unix()
 	}
 
 	_, err := s.db.ExecContext(ctx,
@@ -169,14 +116,14 @@ func (s *Store) UpdateGovernanceProposal(ctx context.Context, p interface{}) err
 			state = ?, yes_votes = ?, no_votes = ?, abstain_votes = ?,
 			updated_at = ?, executed_at = ?
 		WHERE proposal_id = ?`,
-		proposal.State, proposal.YesVotes, proposal.NoVotes, proposal.AbstainVotes,
-		proposal.UpdatedAt.Unix(), executedAt, proposal.ProposalID,
+		p.State, p.YesVotes, p.NoVotes, p.AbstainVotes,
+		p.UpdatedAt.Unix(), executedAt, p.ProposalID,
 	)
 	return err
 }
 
 // GetGovernanceProposal retrieves a proposal by ID.
-func (s *Store) GetGovernanceProposal(ctx context.Context, proposalID string) (interface{}, error) {
+func (s *Store) GetGovernanceProposal(ctx context.Context, proposalID string) (*GovernanceProposal, error) {
 	var p GovernanceProposal
 	var votingStart, votingEnd, createdAt, updatedAt int64
 	var executedAt sql.NullInt64
@@ -212,7 +159,7 @@ func (s *Store) GetGovernanceProposal(ctx context.Context, proposalID string) (i
 }
 
 // ListGovernanceProposals returns proposals filtered by state.
-func (s *Store) ListGovernanceProposals(ctx context.Context, state string, limit, offset int) ([]interface{}, error) {
+func (s *Store) ListGovernanceProposals(ctx context.Context, state string, limit, offset int) ([]*GovernanceProposal, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -227,7 +174,6 @@ func (s *Store) ListGovernanceProposals(ctx context.Context, state string, limit
 		query += " WHERE state = ?"
 		args = append(args, state)
 	}
-
 	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
@@ -237,7 +183,7 @@ func (s *Store) ListGovernanceProposals(ctx context.Context, state string, limit
 	}
 	defer rows.Close()
 
-	var proposals []interface{}
+	var proposals []*GovernanceProposal
 	for rows.Next() {
 		var p GovernanceProposal
 		var votingStart, votingEnd, createdAt, updatedAt int64
@@ -267,34 +213,17 @@ func (s *Store) ListGovernanceProposals(ctx context.Context, state string, limit
 }
 
 // CreateGovernanceVote records a vote on a proposal.
-func (s *Store) CreateGovernanceVote(ctx context.Context, v interface{}) error {
-	var vote GovernanceVote
-	switch val := v.(type) {
-	case *GovernanceVote:
-		vote = *val
-	case GovernanceVote:
-		vote = val
-	default:
-		vote = GovernanceVote{
-			VoteID:     getField(v, "VoteID").(string),
-			ProposalID: getField(v, "ProposalID").(string),
-			VoterDID:   getField(v, "VoterDID").(string),
-			Choice:     getFieldString(v, "Choice"),
-			Signature:  getField(v, "Signature").(string),
-			CreatedAt:  getField(v, "CreatedAt").(time.Time),
-		}
-	}
-
+func (s *Store) CreateGovernanceVote(ctx context.Context, v *GovernanceVote) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO governance_votes (vote_id, proposal_id, voter_did, choice, signature, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		vote.VoteID, vote.ProposalID, vote.VoterDID, vote.Choice, vote.Signature, vote.CreatedAt.Unix(),
+		v.VoteID, v.ProposalID, v.VoterDID, v.Choice, v.Signature, v.CreatedAt.Unix(),
 	)
 	return err
 }
 
 // GetGovernanceVote retrieves a specific vote by proposal and voter.
-func (s *Store) GetGovernanceVote(ctx context.Context, proposalID, voterDID string) (interface{}, error) {
+func (s *Store) GetGovernanceVote(ctx context.Context, proposalID, voterDID string) (*GovernanceVote, error) {
 	var v GovernanceVote
 	var createdAt int64
 
@@ -316,7 +245,7 @@ func (s *Store) GetGovernanceVote(ctx context.Context, proposalID, voterDID stri
 }
 
 // ListGovernanceVotes returns all votes for a proposal.
-func (s *Store) ListGovernanceVotes(ctx context.Context, proposalID string) ([]interface{}, error) {
+func (s *Store) ListGovernanceVotes(ctx context.Context, proposalID string) ([]*GovernanceVote, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT vote_id, proposal_id, voter_did, choice, signature, created_at
 		 FROM governance_votes WHERE proposal_id = ? ORDER BY created_at ASC`,
@@ -327,7 +256,7 @@ func (s *Store) ListGovernanceVotes(ctx context.Context, proposalID string) ([]i
 	}
 	defer rows.Close()
 
-	var votes []interface{}
+	var votes []*GovernanceVote
 	for rows.Next() {
 		var v GovernanceVote
 		var createdAt int64
@@ -345,8 +274,6 @@ func (s *Store) ListGovernanceVotes(ctx context.Context, proposalID string) ([]i
 
 // CountEligibleVoters returns the number of nodes eligible to vote.
 func (s *Store) CountEligibleVoters(ctx context.Context) (int, error) {
-	// Count registered nodes in the federation
-	// This queries the node_registry table or similar
 	var count int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM (
@@ -359,21 +286,4 @@ func (s *Store) CountEligibleVoters(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return count, nil
-}
-
-// Helper functions for reflection-based field access
-func getField(obj interface{}, fieldName string) interface{} {
-	// This is a simplified placeholder - in production use reflect package
-	// For now, we'll use type assertions in the actual conversion logic
-	return nil
-}
-
-func getFieldString(obj interface{}, fieldName string) string {
-	// Simplified placeholder
-	return ""
-}
-
-func getFieldTimePtr(obj interface{}, fieldName string) *time.Time {
-	// Simplified placeholder
-	return nil
 }
