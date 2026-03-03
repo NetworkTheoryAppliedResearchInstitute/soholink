@@ -103,7 +103,7 @@ Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 2
 
 $State = (Get-ScheduledTask -TaskName $TaskName).State
-Write-Host "  [5/5] Node started — Task state: $State" -ForegroundColor Green
+Write-Host "  [5/5] Node started - Task state: $State" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "  Installation complete!" -ForegroundColor Cyan
@@ -112,6 +112,6 @@ Write-Host "  HTTP API   : http://localhost:8080/api/health"
 Write-Host "  RADIUS     : UDP 0.0.0.0:1812  (auth)"
 Write-Host "               UDP 0.0.0.0:1813  (accounting)"
 Write-Host ""
-Write-Host "  Manage via Task Scheduler -> '$TaskName'"
-Write-Host "  Uninstall  : scripts\uninstall-service.ps1  (as Administrator)"
+Write-Host ("  Manage via Task Scheduler -> '" + $TaskName + "'")
+Write-Host '  Uninstall  : scripts\uninstall-service.ps1  (as Administrator)'
 Write-Host ""
