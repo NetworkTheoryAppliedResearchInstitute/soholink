@@ -17,11 +17,13 @@ type Manager struct {
 }
 
 // NewManager creates a new LBTAS manager.
-func NewManager(s *store.Store, ac *accounting.Collector) *Manager {
-	return &Manager{
-		store:      s,
-		accounting: ac,
+// The accounting.Collector argument is optional; pass nil or omit it for tests.
+func NewManager(s *store.Store, ac ...*accounting.Collector) *Manager {
+	m := &Manager{store: s}
+	if len(ac) > 0 {
+		m.accounting = ac[0]
 	}
+	return m
 }
 
 // ProviderRatesUser handles the provider rating the user after job completion.

@@ -333,7 +333,7 @@ func TestMigrationManager_PrecopyDowntime(t *testing.T) {
 
 func TestMigrationManager_PostcopyConvergence(t *testing.T) {
 	// Post-copy should have instant switchover
-	progress := &MigrationProgress{
+	_ = &MigrationProgress{
 		Config: &MigrationConfig{
 			Mode: ModePostcopy,
 		},

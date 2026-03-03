@@ -1,3 +1,5 @@
+//go:build linux
+
 package compute
 
 import (
@@ -15,7 +17,7 @@ func TestCgroupV2Manager_CreateCgroup(t *testing.T) {
 	}
 
 	name := "test-cgroup"
-	err := manager.CreateCgroup(name)
+	_, err := manager.CreateCgroup(name)
 	if err != nil {
 		t.Fatalf("CreateCgroup failed: %v", err)
 	}
@@ -394,12 +396,12 @@ func TestCgroupV2Manager_Hierarchy(t *testing.T) {
 	}
 
 	// Create nested cgroups
-	err := manager.CreateCgroup("parent")
+	_, err := manager.CreateCgroup("parent")
 	if err != nil {
 		t.Fatalf("Failed to create parent: %v", err)
 	}
 
-	err = manager.CreateCgroup("parent/child")
+	_, err = manager.CreateCgroup("parent/child")
 	if err != nil {
 		t.Fatalf("Failed to create child: %v", err)
 	}
@@ -458,7 +460,7 @@ func TestCgroupV2Manager_ConcurrentOperations(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(index int) {
 			name := string(rune('A' + index))
-			err := manager.CreateCgroup(name)
+			_, err := manager.CreateCgroup(name)
 			if err != nil {
 				t.Errorf("Concurrent CreateCgroup failed for %s: %v", name, err)
 			}

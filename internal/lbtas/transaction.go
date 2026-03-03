@@ -1,6 +1,7 @@
 package lbtas
 
 import (
+	"encoding/binary"
 	"time"
 )
 
@@ -84,14 +85,13 @@ type BlockchainAnchor struct {
 func (r *LBTASRating) Bytes() []byte {
 	// Simple deterministic serialization for signing
 	data := make([]byte, 0, 256)
-	data = append(data, byte(r.Score))
+	data = append(data, byte(r.Score)) // #nosec G115 -- Score is 0-5 by domain definition; always fits in byte
 	data = append(data, []byte(r.Category)...)
 	data = append(data, []byte(r.Feedback)...)
-	ts := r.Timestamp.UTC().Unix()
-	data = append(data,
-		byte(ts>>56), byte(ts>>48), byte(ts>>40), byte(ts>>32),
-		byte(ts>>24), byte(ts>>16), byte(ts>>8), byte(ts),
-	)
+	ts := uint64(r.Timestamp.UTC().Unix()) // #nosec G115 -- rating timestamps are always after the Unix epoch
+	tsBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(tsBytes, ts)
+	data = append(data, tsBytes...)
 	return data
 }
 

@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -46,7 +47,7 @@ func NewLocalChain(s *store.Store, nodeDID string, privateKey ed25519.PrivateKey
 	// Load latest block from store
 	if latest, err := s.GetLatestBlockchainBatch(context.Background()); err == nil && latest != nil {
 		lc.latestBlock = &Block{
-			Height:     uint64(latest.Height),
+			Height:     uint64(latest.Height), // #nosec G115 -- block heights are non-negative by protocol invariant
 			MerkleRoot: latest.MerkleRoot,
 			PrevHash:   latest.PrevHash,
 			Hash:       latest.Hash,
@@ -142,7 +143,7 @@ func (lc *LocalChain) VerifyBatch(ctx context.Context, txHash string, expectedRo
 	}
 
 	// Verify chain integrity: recompute hash and check
-	recomputed := computeBlockHash(uint64(row.Height), row.MerkleRoot, row.PrevHash, row.Timestamp, row.NodeDID)
+	recomputed := computeBlockHash(uint64(row.Height), row.MerkleRoot, row.PrevHash, row.Timestamp, row.NodeDID) // #nosec G115 -- block heights are non-negative by protocol invariant
 	for i := range recomputed {
 		if recomputed[i] != row.Hash[i] {
 			return false, fmt.Errorf("block hash mismatch: chain integrity violated")
@@ -171,13 +172,13 @@ func (lc *LocalChain) GetLatestCheckpoint(ctx context.Context) (*Checkpoint, err
 
 // GetBlock returns a specific block by height.
 func (lc *LocalChain) GetBlock(ctx context.Context, height uint64) (*Block, error) {
-	row, err := lc.store.GetBlockchainBatchByHeight(ctx, int64(height))
+	row, err := lc.store.GetBlockchainBatchByHeight(ctx, int64(height)) // #nosec G115 -- height is a uint64 block index; blockchain heights fit in int64 (< 2^63)
 	if err != nil {
 		return nil, fmt.Errorf("block %d not found: %w", height, err)
 	}
 
 	return &Block{
-		Height:     uint64(row.Height),
+		Height:     uint64(row.Height), // #nosec G115 -- block heights are non-negative by protocol invariant
 		MerkleRoot: row.MerkleRoot,
 		PrevHash:   row.PrevHash,
 		Hash:       row.Hash,
@@ -205,6 +206,14 @@ func (lc *LocalChain) ChainHeight(ctx context.Context) (uint64, error) {
 
 // VerifyChainIntegrity walks the entire chain and verifies hash linkage.
 func (lc *LocalChain) VerifyChainIntegrity(ctx context.Context) error {
+	// Empty chain is always valid.
+	lc.mu.RLock()
+	isEmpty := lc.latestBlock == nil
+	lc.mu.RUnlock()
+	if isEmpty {
+		return nil
+	}
+
 	height, err := lc.ChainHeight(ctx)
 	if err != nil {
 		return err
@@ -259,30 +268,16 @@ func computeBlockHash(height uint64, merkleRoot, prevHash []byte, timestamp time
 
 	// Height as 8-byte big-endian
 	heightBytes := make([]byte, 8)
-	heightBytes[0] = byte(height >> 56)
-	heightBytes[1] = byte(height >> 48)
-	heightBytes[2] = byte(height >> 40)
-	heightBytes[3] = byte(height >> 32)
-	heightBytes[4] = byte(height >> 24)
-	heightBytes[5] = byte(height >> 16)
-	heightBytes[6] = byte(height >> 8)
-	heightBytes[7] = byte(height)
+	binary.BigEndian.PutUint64(heightBytes, height)
 	h.Write(heightBytes)
 
 	h.Write(merkleRoot)
 	h.Write(prevHash)
 
 	// Timestamp as Unix seconds (8-byte big-endian)
-	ts := timestamp.Unix()
+	ts := uint64(timestamp.Unix()) // #nosec G115 -- blockchain timestamps are always after the Unix epoch
 	tsBytes := make([]byte, 8)
-	tsBytes[0] = byte(ts >> 56)
-	tsBytes[1] = byte(ts >> 48)
-	tsBytes[2] = byte(ts >> 40)
-	tsBytes[3] = byte(ts >> 32)
-	tsBytes[4] = byte(ts >> 24)
-	tsBytes[5] = byte(ts >> 16)
-	tsBytes[6] = byte(ts >> 8)
-	tsBytes[7] = byte(ts)
+	binary.BigEndian.PutUint64(tsBytes, ts)
 	h.Write(tsBytes)
 
 	h.Write([]byte(nodeDID))

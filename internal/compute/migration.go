@@ -7,8 +7,12 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+var migrationCounter uint64
 
 // MigrationMode defines the type of VM migration.
 type MigrationMode string
@@ -25,6 +29,11 @@ const (
 	// MigrationModeOffline stops the VM, transfers state, then starts on destination.
 	// Highest downtime but most reliable for difficult workloads.
 	MigrationModeOffline MigrationMode = "offline"
+
+	// Short-form aliases for convenience.
+	ModePrecopy  = MigrationModePrecopy
+	ModePostcopy = MigrationModePostcopy
+	ModeOffline  = MigrationModeOffline
 )
 
 // MigrationConfig configures a VM migration operation.
@@ -62,7 +71,17 @@ type MigrationConfig struct {
 
 // MigrationProgress tracks the status of an ongoing migration.
 type MigrationProgress struct {
+	// High-level tracking fields
+	MigrationID      string
+	Config           *MigrationConfig
 	Status           MigrationStatus
+	PercentComplete  float64
+	BytesTransferred int64
+	BytesRemaining   int64
+	StartTime        time.Time
+	EndTime          time.Time
+
+	// Low-level QMP fields used during live migration
 	TotalBytes       uint64
 	TransferredBytes uint64
 	RemainingBytes   uint64
@@ -73,6 +92,35 @@ type MigrationProgress struct {
 	ElapsedMs        int
 	BandwidthMBps    float64
 	Error            string
+}
+
+// EstimatedTimeRemaining estimates the time left to complete the migration.
+func (p *MigrationProgress) EstimatedTimeRemaining() time.Duration {
+	if p.BytesTransferred == 0 || p.StartTime.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(p.StartTime).Seconds()
+	if elapsed == 0 {
+		return 0
+	}
+	speed := float64(p.BytesTransferred) / elapsed
+	if speed == 0 {
+		return 0
+	}
+	remaining := float64(p.BytesRemaining) / speed
+	return time.Duration(remaining * float64(time.Second))
+}
+
+// TransferSpeed returns the current transfer speed in bytes per second.
+func (p *MigrationProgress) TransferSpeed() float64 {
+	if p.BytesTransferred == 0 || p.StartTime.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(p.StartTime).Seconds()
+	if elapsed == 0 {
+		return 0
+	}
+	return float64(p.BytesTransferred) / elapsed
 }
 
 // MigrationStatus represents the current state of a migration.
@@ -91,6 +139,8 @@ type MigrationManager struct {
 	sourceHypervisor      Hypervisor
 	destinationHypervisor Hypervisor
 	migrationPort         int
+	mu                    sync.RWMutex
+	migrations            map[string]*MigrationProgress
 }
 
 // NewMigrationManager creates a new migration manager.
@@ -99,7 +149,61 @@ func NewMigrationManager(source, destination Hypervisor) *MigrationManager {
 		sourceHypervisor:      source,
 		destinationHypervisor: destination,
 		migrationPort:         49152, // Default migration port
+		migrations:            make(map[string]*MigrationProgress),
 	}
+}
+
+// InitiateMigration starts a migration and returns its tracking ID.
+func (m *MigrationManager) InitiateMigration(ctx context.Context, config *MigrationConfig) (string, error) {
+	if err := m.validateConfig(config); err != nil {
+		return "", err
+	}
+	migrationID := fmt.Sprintf("mig-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&migrationCounter, 1))
+	progress := &MigrationProgress{
+		MigrationID: migrationID,
+		Config:      config,
+		Status:      "pending",
+		StartTime:   time.Now(),
+	}
+	m.mu.Lock()
+	m.migrations[migrationID] = progress
+	m.mu.Unlock()
+	return migrationID, nil
+}
+
+// GetProgress retrieves the progress for a migration by ID.
+func (m *MigrationManager) GetProgress(migrationID string) (*MigrationProgress, error) {
+	m.mu.RLock()
+	progress, ok := m.migrations[migrationID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("migration not found: %s", migrationID)
+	}
+	return progress, nil
+}
+
+// CancelMigration cancels an in-progress migration.
+func (m *MigrationManager) CancelMigration(migrationID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	progress, ok := m.migrations[migrationID]
+	if !ok {
+		return fmt.Errorf("migration not found: %s", migrationID)
+	}
+	progress.Status = "cancelled"
+	progress.EndTime = time.Now()
+	return nil
+}
+
+// ListMigrations returns all tracked migrations.
+func (m *MigrationManager) ListMigrations() []*MigrationProgress {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]*MigrationProgress, 0, len(m.migrations))
+	for _, p := range m.migrations {
+		result = append(result, p)
+	}
+	return result
 }
 
 // Migrate performs a live migration of a VM.
@@ -440,11 +544,17 @@ func (m *MigrationManager) validateConfig(config *MigrationConfig) error {
 	if config.SourceVMID == "" {
 		return fmt.Errorf("source VM ID is required")
 	}
-	if config.DestinationHost == "" && config.Mode != MigrationModeOffline {
-		return fmt.Errorf("destination host is required for live migration")
-	}
 	if config.Mode == "" {
 		config.Mode = MigrationModePrecopy
+	}
+	switch config.Mode {
+	case MigrationModePrecopy, MigrationModePostcopy, MigrationModeOffline:
+		// valid mode
+	default:
+		return fmt.Errorf("invalid migration mode: %s", config.Mode)
+	}
+	if config.DestinationHost == "" && config.Mode != MigrationModeOffline {
+		return fmt.Errorf("destination host is required for live migration")
 	}
 	if config.TLSEnabled && (config.TLSCertPath == "" || config.TLSKeyPath == "") {
 		return fmt.Errorf("TLS cert and key paths required when TLS is enabled")

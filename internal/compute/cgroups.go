@@ -115,7 +115,7 @@ func (c *CgroupV2Manager) DeleteCgroup(name string) error {
 		parentProcs := filepath.Join(c.soholinkPath, "cgroup.procs")
 		for _, pid := range strings.Split(string(procs), "\n") {
 			if pid != "" {
-				os.WriteFile(parentProcs, []byte(pid), 0644)
+				os.WriteFile(parentProcs, []byte(pid), 0644) // #nosec G703 -- parentProcs is an internal cgroup path under soholinkPath; not user-controlled
 			}
 		}
 	}
@@ -304,7 +304,7 @@ func (c *CgroupV2Manager) enableControllers(cgroupPath string) error {
 	for _, controller := range enabledControllers {
 		enable := fmt.Sprintf("+%s", controller)
 		// Ignore errors - controller may already be enabled
-		os.WriteFile(subtreeFile, []byte(enable), 0644)
+		os.WriteFile(subtreeFile, []byte(enable), 0644) // #nosec G703 -- subtreeFile is an internal cgroup path; not user-controlled
 	}
 
 	return nil

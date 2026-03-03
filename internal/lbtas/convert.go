@@ -45,7 +45,7 @@ func TransactionFromRow(row *store.ResourceTransactionRow) *ResourceTransaction 
 	// Reconstruct BlockchainAnchor if present
 	if row.BlockchainBlock != nil {
 		anchor := &BlockchainAnchor{
-			BlockHeight: uint64(*row.BlockchainBlock),
+			BlockHeight: uint64(*row.BlockchainBlock), // #nosec G115 -- blockchain block heights stored as non-negative int64 by DB schema
 		}
 		if len(row.BlockchainHash) == 32 {
 			copy(anchor.DataHash[:], row.BlockchainHash)
@@ -86,7 +86,7 @@ func TransactionToRow(tx *ResourceTransaction) *store.ResourceTransactionRow {
 	}
 
 	if tx.BlockchainAnchor != nil {
-		block := int64(tx.BlockchainAnchor.BlockHeight)
+		block := int64(tx.BlockchainAnchor.BlockHeight) // #nosec G115 -- block heights fit in int64; DB schema uses int64 for nullable column
 		row.BlockchainBlock = &block
 		row.BlockchainHash = tx.BlockchainAnchor.DataHash[:]
 	}
@@ -119,7 +119,7 @@ func ScoreFromRow(row *store.LBTASScoreRow) *LBTASScore {
 
 	// Convert LastAnchorBlock
 	if row.LastAnchorBlock != nil {
-		score.LastAnchorBlock = uint64(*row.LastAnchorBlock)
+		score.LastAnchorBlock = uint64(*row.LastAnchorBlock) // #nosec G115 -- anchor block heights stored as non-negative int64 by DB schema
 	}
 
 	// Copy LastAnchorHash
@@ -158,7 +158,7 @@ func ScoreToRow(score *LBTASScore) *store.LBTASScoreRow {
 
 	// Convert LastAnchorBlock
 	if score.LastAnchorBlock > 0 {
-		block := int64(score.LastAnchorBlock)
+		block := int64(score.LastAnchorBlock) // #nosec G115 -- anchor block heights fit in int64; DB schema uses int64 for nullable column
 		row.LastAnchorBlock = &block
 	}
 

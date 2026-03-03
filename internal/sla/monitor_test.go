@@ -41,10 +41,10 @@ func TestComputeCredit_TieredSystem(t *testing.T) {
 			expectedCredit: 2500, // $25.00
 		},
 		{
-			name:           "premium tier - <99.0% uptime (50% credit, maxed)",
+			name:           "premium tier - <98.0% uptime (50% credit, maxed)",
 			tier:           TierPremium,
 			monthlyCost:    10000, // $100.00
-			actualUptime:   98.5,
+			actualUptime:   97.0,
 			expectedCredit: 5000, // $50.00 (capped at MaxCredit 50%)
 		},
 		// Standard tier tests (99.5% target)

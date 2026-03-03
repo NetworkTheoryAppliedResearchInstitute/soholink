@@ -1,0 +1,151 @@
+# .github/dependabot.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependabot keeps every dependency layer current automatically.
+#
+# Strategy:
+#   gomod         — one PR per direct dependency, weekly (Mon 09:00 UTC)
+#   github-actions — one PR per action version bump, weekly (Mon 09:00 UTC)
+#
+# Each PR targets `main`, is labelled, and is auto-assigned for review.
+# Security-only patches are opened immediately regardless of schedule.
+# ─────────────────────────────────────────────────────────────────────────────
+version: 2
+
+updates:
+  # ── Go modules ─────────────────────────────────────────────────────────────
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "UTC"
+
+    # Keep PRs small — one dependency per PR so failures are easy to bisect
+    open-pull-requests-limit: 10
+
+    # Target branch for all update PRs
+    target-branch: main
+
+    labels:
+      - dependencies
+      - go
+
+    # Conventional-commit style
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+
+    # Automatically rebase stale PRs rather than letting them pile up
+    rebase-strategy: auto
+
+    # Group minor + patch updates into a single weekly PR to reduce noise.
+    # Security updates are always opened individually regardless of groups.
+    groups:
+      # Fyne GUI toolkit — keep all fyne.io/* in sync (they release together)
+      fyne:
+        patterns:
+          - "fyne.io/*"
+        update-types:
+          - minor
+          - patch
+
+      # golang.org/x — frequently release together
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+        update-types:
+          - minor
+          - patch
+
+      # OPA — policy engine; minor/patch grouped; majors get their own PR
+      opa:
+        patterns:
+          - "github.com/open-policy-agent/opa"
+        update-types:
+          - minor
+          - patch
+
+      # lestrrat-go JWT/JWK family — always release in sync
+      lestrrat:
+        patterns:
+          - "github.com/lestrrat-go/*"
+        update-types:
+          - minor
+          - patch
+
+      # Prometheus client — client + model + common should match
+      prometheus:
+        patterns:
+          - "github.com/prometheus/*"
+        update-types:
+          - minor
+          - patch
+
+      # OpenTelemetry — all otel/* should upgrade together
+      otel:
+        patterns:
+          - "go.opentelemetry.io/*"
+        update-types:
+          - minor
+          - patch
+
+      # modernc SQLite driver + supporting libs
+      modernc:
+        patterns:
+          - "modernc.org/*"
+        update-types:
+          - minor
+          - patch
+
+      # Cobra + Viper + Afero + related spf13 packages
+      spf13:
+        patterns:
+          - "github.com/spf13/*"
+        update-types:
+          - minor
+          - patch
+
+      # All other minor + patch bumps batched into one weekly PR
+      all-other-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+    # Ignore pre-release versions for production deps
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-prerelease
+
+  # ── GitHub Actions ──────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: "UTC"
+
+    open-pull-requests-limit: 5
+    target-branch: main
+
+    labels:
+      - dependencies
+      - github-actions
+
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope
+
+    rebase-strategy: auto
+
+    groups:
+      all-actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

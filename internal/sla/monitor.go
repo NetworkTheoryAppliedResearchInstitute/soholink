@@ -99,7 +99,7 @@ func (m *Monitor) CheckLatency(contractID string, actualLatencyMs int) {
 
 		if actualLatencyMs > contract.LatencyTargetMs*3 {
 			violation.Severity = "critical"
-		} else if actualLatencyMs > contract.LatencyTargetMs*2 {
+		} else if actualLatencyMs >= contract.LatencyTargetMs*2 {
 			violation.Severity = "major"
 		}
 

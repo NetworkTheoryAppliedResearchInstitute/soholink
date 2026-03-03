@@ -15,6 +15,9 @@ type BackupManager struct {
 
 	// Docker client for executing backup commands
 	dockerClient *DockerClient
+
+	// In-memory backup registry
+	backups map[string]*Backup
 }
 
 // BackupConfig configures a backup operation.
@@ -28,6 +31,21 @@ type BackupConfig struct {
 	// Whether to compress the backup
 	Compress bool
 
+	// Whether to encrypt the backup
+	Encrypt bool
+
+	// Encryption key for encrypted backups
+	EncryptionKey string
+
+	// Whether this is an incremental backup
+	Incremental bool
+
+	// Base backup ID for incremental backups
+	BaseBackupID string
+
+	// Whether to use point-in-time recovery
+	PointInTime bool
+
 	// S3 bucket for offsite storage (optional)
 	S3Bucket string
 
@@ -38,7 +56,7 @@ type BackupConfig struct {
 // Backup represents a completed backup.
 type Backup struct {
 	// Backup ID
-	ID string
+	BackupID string
 
 	// Service instance ID
 	InstanceID string
@@ -47,10 +65,13 @@ type Backup struct {
 	ServiceType ServiceType
 
 	// Backup file path
-	Path string
+	BackupPath string
 
 	// Backup size in bytes
-	Size int64
+	SizeBytes int64
+
+	// Backup status
+	Status string
 
 	// Creation timestamp
 	CreatedAt time.Time
@@ -68,6 +89,7 @@ func NewBackupManager(backupDir string, dockerEndpoint string) (*BackupManager, 
 	return &BackupManager{
 		backupDir:    backupDir,
 		dockerClient: NewDockerClient(dockerEndpoint),
+		backups:      make(map[string]*Backup),
 	}, nil
 }
 
@@ -134,12 +156,14 @@ func (bm *BackupManager) BackupPostgreSQL(ctx context.Context, instance *Service
 		return nil, fmt.Errorf("failed to stat backup file: %w", err)
 	}
 
+	backupID := fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName)
 	backup := &Backup{
-		ID:          fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName),
+		BackupID:    backupID,
 		InstanceID:  instance.InstanceID,
 		ServiceType: instance.ServiceType,
-		Path:        backupFile,
-		Size:        info.Size(),
+		BackupPath:  backupFile,
+		SizeBytes:   info.Size(),
+		Status:      "completed",
 		CreatedAt:   time.Now(),
 		Metadata: map[string]string{
 			"database":   instance.Credentials.Database,
@@ -147,24 +171,28 @@ func (bm *BackupManager) BackupPostgreSQL(ctx context.Context, instance *Service
 		},
 	}
 
+	if bm.backups != nil {
+		bm.backups[backupID] = backup
+	}
+
 	return backup, nil
 }
 
 // RestorePostgreSQL restores a PostgreSQL database from backup.
-func (bm *BackupManager) RestorePostgreSQL(ctx context.Context, instance *ServiceInstance, backupPath string) error {
+func (bm *BackupManager) RestorePostgreSQL(ctx context.Context, instance *ServiceInstance, backup *Backup) error {
 	containerID, ok := instance.Config["container_id"]
 	if !ok {
 		return fmt.Errorf("container_id not found")
 	}
 
 	// Read backup file
-	backupData, err := os.ReadFile(backupPath)
+	backupData, err := os.ReadFile(backup.BackupPath)
 	if err != nil {
 		return fmt.Errorf("failed to read backup file: %w", err)
 	}
 
 	// Determine if compressed
-	compressed := filepath.Ext(backupPath) == ".gz"
+	compressed := filepath.Ext(backup.BackupPath) == ".gz"
 
 	// Execute psql to restore
 	restoreCmd := fmt.Sprintf("psql -U %s -d %s",
@@ -259,17 +287,23 @@ func (bm *BackupManager) BackupMySQL(ctx context.Context, instance *ServiceInsta
 		return nil, fmt.Errorf("failed to stat backup file: %w", err)
 	}
 
+	backupID := fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName)
 	backup := &Backup{
-		ID:          fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName),
+		BackupID:    backupID,
 		InstanceID:  instance.InstanceID,
 		ServiceType: instance.ServiceType,
-		Path:        backupFile,
-		Size:        info.Size(),
+		BackupPath:  backupFile,
+		SizeBytes:   info.Size(),
+		Status:      "completed",
 		CreatedAt:   time.Now(),
 		Metadata: map[string]string{
 			"database":   instance.Credentials.Database,
 			"compressed": fmt.Sprintf("%t", config.Compress),
 		},
+	}
+
+	if bm.backups != nil {
+		bm.backups[backupID] = backup
 	}
 
 	return backup, nil
@@ -326,16 +360,22 @@ func (bm *BackupManager) BackupMongoDB(ctx context.Context, instance *ServiceIns
 		return nil, fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
+	backupID := fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName)
 	backup := &Backup{
-		ID:          fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName),
+		BackupID:    backupID,
 		InstanceID:  instance.InstanceID,
 		ServiceType: instance.ServiceType,
-		Path:        backupDir,
-		Size:        0, // Would calculate from directory
+		BackupPath:  backupDir,
+		SizeBytes:   0, // Would calculate from directory
+		Status:      "completed",
 		CreatedAt:   time.Now(),
 		Metadata: map[string]string{
 			"database": instance.Credentials.Database,
 		},
+	}
+
+	if bm.backups != nil {
+		bm.backups[backupID] = backup
 	}
 
 	return backup, nil
@@ -396,82 +436,71 @@ func (bm *BackupManager) BackupRedis(ctx context.Context, instance *ServiceInsta
 		return nil, fmt.Errorf("failed to stat backup file: %w", err)
 	}
 
+	backupID := fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName)
 	backup := &Backup{
-		ID:          fmt.Sprintf("backup-%s-%s", instance.InstanceID, backupName),
+		BackupID:    backupID,
 		InstanceID:  instance.InstanceID,
 		ServiceType: instance.ServiceType,
-		Path:        backupFile,
-		Size:        info.Size(),
+		BackupPath:  backupFile,
+		SizeBytes:   info.Size(),
+		Status:      "completed",
 		CreatedAt:   time.Now(),
 		Metadata: map[string]string{
 			"type": "rdb",
 		},
 	}
 
+	if bm.backups != nil {
+		bm.backups[backupID] = backup
+	}
+
 	return backup, nil
 }
 
-// ListBackups lists all backups for a service instance.
-func (bm *BackupManager) ListBackups(instanceID string) ([]*Backup, error) {
-	instanceBackupDir := filepath.Join(bm.backupDir, instanceID)
-
-	if _, err := os.Stat(instanceBackupDir); os.IsNotExist(err) {
-		return []*Backup{}, nil
-	}
-
-	entries, err := os.ReadDir(instanceBackupDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read backup directory: %w", err)
-	}
-
-	backups := make([]*Backup, 0)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+// ListBackups returns backups from the in-memory registry.
+// If instanceID is empty, all backups are returned.
+func (bm *BackupManager) ListBackups(instanceID string) []*Backup {
+	result := make([]*Backup, 0)
+	for _, b := range bm.backups {
+		if instanceID == "" || b.InstanceID == instanceID {
+			result = append(result, b)
 		}
-
-		path := filepath.Join(instanceBackupDir, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		backup := &Backup{
-			ID:         fmt.Sprintf("backup-%s-%s", instanceID, entry.Name()),
-			InstanceID: instanceID,
-			Path:       path,
-			Size:       info.Size(),
-			CreatedAt:  info.ModTime(),
-		}
-
-		backups = append(backups, backup)
 	}
-
-	return backups, nil
+	return result
 }
 
-// DeleteBackup deletes a backup file.
-func (bm *BackupManager) DeleteBackup(backupPath string) error {
-	if err := os.Remove(backupPath); err != nil {
+// GetBackup retrieves a backup by ID.
+func (bm *BackupManager) GetBackup(id string) (*Backup, error) {
+	b, ok := bm.backups[id]
+	if !ok {
+		return nil, fmt.Errorf("backup not found: %s", id)
+	}
+	return b, nil
+}
+
+// DeleteBackup deletes a backup by ID, removing both the file and registry entry.
+func (bm *BackupManager) DeleteBackup(backupID string) error {
+	backup, ok := bm.backups[backupID]
+	if !ok {
+		return fmt.Errorf("backup not found: %s", backupID)
+	}
+	if err := os.Remove(backup.BackupPath); err != nil {
 		return fmt.Errorf("failed to delete backup: %w", err)
 	}
+	delete(bm.backups, backupID)
 	return nil
 }
 
 // CleanupOldBackups removes backups older than the retention period.
 func (bm *BackupManager) CleanupOldBackups(instanceID string, retentionDays int) error {
-	backups, err := bm.ListBackups(instanceID)
-	if err != nil {
-		return err
-	}
-
+	backups := bm.ListBackups(instanceID)
 	cutoff := time.Now().AddDate(0, 0, -retentionDays)
 
 	for _, backup := range backups {
 		if backup.CreatedAt.Before(cutoff) {
-			if err := bm.DeleteBackup(backup.Path); err != nil {
+			if err := bm.DeleteBackup(backup.BackupID); err != nil {
 				// Log error but continue
-				fmt.Printf("Failed to delete old backup %s: %v\n", backup.Path, err)
+				fmt.Printf("Failed to delete old backup %s: %v\n", backup.BackupID, err)
 			}
 		}
 	}

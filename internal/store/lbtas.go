@@ -288,8 +288,8 @@ func (s *Store) GetPendingPayments(ctx context.Context, limit int) ([]PendingPay
 			&p.Amount, &p.Currency, &p.ResourceType, &p.Attempts, &nextRetry, &createdAt); err != nil {
 			return nil, fmt.Errorf("failed to scan payment: %w", err)
 		}
-		p.NextRetry, _ = time.Parse("2006-01-02 15:04:05", nextRetry)
-		p.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		p.NextRetry = parseSQLiteTime(nextRetry)
+		p.CreatedAt = parseSQLiteTime(createdAt)
 		payments = append(payments, p)
 	}
 	return payments, rows.Err()
@@ -312,14 +312,38 @@ func (s *Store) CountPendingPayments(ctx context.Context) (int, error) {
 
 // CreatePendingPayment inserts a new pending payment for offline settlement.
 func (s *Store) CreatePendingPayment(ctx context.Context, p *PendingPaymentRow) error {
+	createdAt := p.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	status := p.Status
+	if status == "" {
+		status = "pending"
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO pending_payments (id, charge_id, user_did, provider_did, amount, currency, resource_type, attempts, next_retry)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.ChargeID, p.UserDID, p.ProviderDID, p.Amount, p.Currency, p.ResourceType, p.Attempts, p.NextRetry)
+		`INSERT INTO pending_payments (id, charge_id, user_did, provider_did, amount, currency, resource_type, status, attempts, next_retry, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.ChargeID, p.UserDID, p.ProviderDID, p.Amount, p.Currency, p.ResourceType, status, p.Attempts, p.NextRetry, createdAt.Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return fmt.Errorf("failed to create pending payment: %w", err)
 	}
 	return nil
+}
+
+// parseSQLiteTime parses a datetime string returned by SQLite, trying multiple
+// common formats (SQLite stores datetimes as TEXT without enforcing a format).
+func parseSQLiteTime(s string) time.Time {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // Helper functions
@@ -360,8 +384,8 @@ func (s *Store) GetPaymentByChargeID(ctx context.Context, chargeID string) (*Pen
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payment by charge_id: %w", err)
 	}
-	p.NextRetry, _ = time.Parse("2006-01-02 15:04:05", nextRetry)
-	p.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+	p.NextRetry = parseSQLiteTime(nextRetry)
+	p.CreatedAt = parseSQLiteTime(createdAt)
 	return &p, nil
 }
 
@@ -407,8 +431,8 @@ func (s *Store) ListPaymentsFiltered(ctx context.Context, userDID, providerDID, 
 			&p.Amount, &p.Currency, &p.ResourceType, &p.Status, &p.Attempts, &nextRetry, &createdAt); err != nil {
 			return nil, fmt.Errorf("failed to scan payment: %w", err)
 		}
-		p.NextRetry, _ = time.Parse("2006-01-02 15:04:05", nextRetry)
-		p.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		p.NextRetry = parseSQLiteTime(nextRetry)
+		p.CreatedAt = parseSQLiteTime(createdAt)
 		payments = append(payments, p)
 	}
 	return payments, rows.Err()

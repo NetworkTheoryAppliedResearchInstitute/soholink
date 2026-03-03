@@ -118,7 +118,7 @@ func CreateCredential(username string, privateKey ed25519.PrivateKey) (string, e
 	raw := make([]byte, credentialSize)
 
 	// 4-byte timestamp (big-endian uint32)
-	ts := uint32(time.Now().Unix())
+	ts := uint32(time.Now().Unix()) // #nosec G115 -- Unix timestamp fits in uint32 until year 2106; credentials are short-lived
 	binary.BigEndian.PutUint32(raw[0:timestampSize], ts)
 
 	// 8-byte random nonce
@@ -151,7 +151,7 @@ func CreateCredentialAtTime(username string, privateKey ed25519.PrivateKey, time
 	raw := make([]byte, credentialSize)
 
 	// 4-byte timestamp (big-endian uint32) - use provided timestamp
-	ts := uint32(timestamp.Unix())
+	ts := uint32(timestamp.Unix()) // #nosec G115 -- Unix timestamp fits in uint32 until year 2106; credentials are short-lived
 	binary.BigEndian.PutUint32(raw[0:timestampSize], ts)
 
 	// 8-byte random nonce

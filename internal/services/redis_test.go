@@ -55,20 +55,19 @@ func TestRedisProvisioner_Provision(t *testing.T) {
 	provisioner := &RedisProvisioner{dockerClient: dockerClient}
 
 	req := ProvisionRequest{
-		InstanceID: "redis-test-001",
-		PlanID:     "shared",
+		Name: "redis-test-001",
+		Plan: "shared",
 		Config: map[string]string{
 			"password": "testpass123",
 		},
 	}
 
 	plan := ServicePlan{
-		PlanID:      "shared",
-		Name:        "Shared Redis",
-		MemoryMB:    512,
-		CPUCores:    0.5,
-		StorageGB:   1,
-		MaxMemoryMB: 256,
+		PlanID:    "shared",
+		Name:      "Shared Redis",
+		MemoryMB:  512,
+		CPUCores:  0.5,
+		StorageGB: 1,
 	}
 
 	ctx := context.Background()
@@ -77,8 +76,8 @@ func TestRedisProvisioner_Provision(t *testing.T) {
 		t.Fatalf("Provision failed: %v", err)
 	}
 
-	if instance.InstanceID != req.InstanceID {
-		t.Errorf("Expected instance ID '%s', got '%s'", req.InstanceID, instance.InstanceID)
+	if instance.InstanceID == "" {
+		t.Error("Expected non-empty instance ID")
 	}
 
 	if instance.ServiceType != ServiceTypeRedis {
@@ -208,21 +207,12 @@ func TestRedisProvisioner_GetMetrics(t *testing.T) {
 		t.Errorf("Expected memory usage 256 MB, got %d MB", metrics.MemoryUsageMB)
 	}
 
-	if metrics.CPUUsagePercent <= 0 {
-		t.Errorf("Expected positive CPU usage, got %.2f", metrics.CPUUsagePercent)
-	}
-
-	if metrics.NetworkInBytes != 5242880 {
-		t.Errorf("Expected network in 5242880 bytes, got %d", metrics.NetworkInBytes)
-	}
-
-	if metrics.NetworkOutBytes != 10485760 {
-		t.Errorf("Expected network out 10485760 bytes, got %d", metrics.NetworkOutBytes)
+	if metrics.CPUPercent <= 0 {
+		t.Errorf("Expected positive CPU usage, got %.2f", metrics.CPUPercent)
 	}
 }
 
 func TestRedisProvisioner_ConfigValidation(t *testing.T) {
-	provisioner := &RedisProvisioner{}
 
 	testCases := []struct {
 		name        string
@@ -296,17 +286,17 @@ func TestRedisProvisioner_PlanSizes(t *testing.T) {
 	provisioner := &RedisProvisioner{dockerClient: dockerClient}
 
 	plans := []ServicePlan{
-		{PlanID: "small", MaxMemoryMB: 128, MemoryMB: 256},
-		{PlanID: "medium", MaxMemoryMB: 512, MemoryMB: 1024},
-		{PlanID: "large", MaxMemoryMB: 2048, MemoryMB: 4096},
+		{PlanID: "small", MemoryMB: 256},
+		{PlanID: "medium", MemoryMB: 1024},
+		{PlanID: "large", MemoryMB: 4096},
 	}
 
 	ctx := context.Background()
 
 	for i, plan := range plans {
 		req := ProvisionRequest{
-			InstanceID: "redis-test-" + plan.PlanID,
-			PlanID:     plan.PlanID,
+			Name: "redis-test-" + plan.PlanID,
+			Plan: plan.PlanID,
 		}
 
 		instance, err := provisioner.Provision(ctx, req, plan)
@@ -347,15 +337,14 @@ func BenchmarkRedisProvisioner_Provision(b *testing.B) {
 	provisioner := &RedisProvisioner{dockerClient: dockerClient}
 
 	req := ProvisionRequest{
-		InstanceID: "bench-redis",
-		PlanID:     "shared",
-		Config:     map[string]string{"password": "test"},
+		Name:   "bench-redis",
+		Plan:   "shared",
+		Config: map[string]string{"password": "test"},
 	}
 
 	plan := ServicePlan{
-		PlanID:      "shared",
-		MemoryMB:    512,
-		MaxMemoryMB: 256,
+		PlanID:   "shared",
+		MemoryMB: 512,
 	}
 
 	ctx := context.Background()

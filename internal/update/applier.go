@@ -221,7 +221,7 @@ func RestartProcess() error {
 	args := os.Args[1:]
 
 	// Start new process
-	process, err := os.StartProcess(executable, append([]string{executable}, args...), &os.ProcAttr{
+	process, err := os.StartProcess(executable, append([]string{executable}, args...), &os.ProcAttr{ // #nosec G702 -- executable path is Ed25519-verified before this call; not user-controlled
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 	})
 	if err != nil {

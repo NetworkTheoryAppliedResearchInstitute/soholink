@@ -27,7 +27,7 @@ func NewLightningProcessor(lndHost, macaroon string) *LightningProcessor {
 	// the HTTP client to accept them. In production, you would pin
 	// the LND TLS certificate instead of skipping verification.
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // LND self-signed certs
+		InsecureSkipVerify: true, // #nosec G402 -- LND uses self-signed TLS certs; replace with cert pinning in production
 	}
 	transport := &http.Transport{
 		TLSClientConfig: tlsConfig,

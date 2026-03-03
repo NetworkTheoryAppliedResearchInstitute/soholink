@@ -166,6 +166,9 @@ func (r *Router) probeEdgeNode(address string) (healthy bool, latencyMs int, loa
 	}
 	conn.Close()
 	latencyMs = int(time.Since(start).Milliseconds())
+	if latencyMs == 0 {
+		latencyMs = 1 // floor at 1ms so callers can distinguish measured vs. not-measured
+	}
 
 	// Query /cdn/status for load information
 	statusURL := fmt.Sprintf("http://%s/cdn/status", address)

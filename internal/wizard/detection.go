@@ -148,9 +148,9 @@ func detectMemory() (MemoryInfo, error) {
 	}
 
 	return MemoryInfo{
-		TotalGB:     int(vmem.Total / (1024 * 1024 * 1024)),
-		AvailableGB: int(vmem.Available / (1024 * 1024 * 1024)),
-		UsedGB:      int(vmem.Used / (1024 * 1024 * 1024)),
+		TotalGB:     int(vmem.Total / (1024 * 1024 * 1024)),     // #nosec G115 -- physical RAM in GB never exceeds MaxInt on any supported platform
+		AvailableGB: int(vmem.Available / (1024 * 1024 * 1024)), // #nosec G115 -- physical RAM in GB never exceeds MaxInt on any supported platform
+		UsedGB:      int(vmem.Used / (1024 * 1024 * 1024)),      // #nosec G115 -- physical RAM in GB never exceeds MaxInt on any supported platform
 		UsedPercent: vmem.UsedPercent,
 	}, nil
 }
@@ -174,9 +174,9 @@ func detectStorage() (StorageInfo, error) {
 	}
 
 	return StorageInfo{
-		TotalGB:     int(usage.Total / (1024 * 1024 * 1024)),
-		AvailableGB: int(usage.Free / (1024 * 1024 * 1024)),
-		UsedGB:      int(usage.Used / (1024 * 1024 * 1024)),
+		TotalGB:     int(usage.Total / (1024 * 1024 * 1024)),     // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
+		AvailableGB: int(usage.Free / (1024 * 1024 * 1024)),      // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
+		UsedGB:      int(usage.Used / (1024 * 1024 * 1024)),      // #nosec G115 -- disk size in GB never exceeds MaxInt on any supported platform
 		UsedPercent: usage.UsedPercent,
 		Filesystem:  usage.Fstype,
 		MountPoint:  mountPoint,

@@ -408,7 +408,7 @@ func TestLookupPublicKey(t *testing.T) {
 		Role:      "basic",
 	}
 
-	if err := s.CreateUser(ctx, user); err != nil {
+	if err := s.AddUser(ctx, user.Username, user.DID, user.PublicKey, user.Role); err != nil {
 		t.Fatal(err)
 	}
 

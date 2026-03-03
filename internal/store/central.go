@@ -301,9 +301,9 @@ func (s *Store) CountJobsByState(ctx context.Context, state string) (int, error)
 // CreateCentralRevenue records a revenue split.
 func (s *Store) CreateCentralRevenue(ctx context.Context, r *CentralRevenueRow) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO central_revenue (revenue_id, transaction_id, tenant_id, total_amount, central_fee, producer_payout, processor_fee, currency, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.RevenueID, r.TransactionID, r.TenantID, r.TotalAmount, r.CentralFee, r.ProducerPayout, r.ProcessorFee, r.Currency, r.CreatedAt)
+		`INSERT INTO central_revenue (revenue_id, transaction_id, tenant_id, total_amount, central_fee, producer_payout, processor_fee, currency, settled_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.RevenueID, r.TransactionID, r.TenantID, r.TotalAmount, r.CentralFee, r.ProducerPayout, r.ProcessorFee, r.Currency, r.SettledAt, r.CreatedAt)
 	return err
 }
 
@@ -788,6 +788,30 @@ func (s *Store) GetRecentRevenue(ctx context.Context, limit int) ([]RevenueRow, 
 		result = append(result, r)
 	}
 	return result, nil
+}
+
+// RecordCentralRevenue inserts a RevenueRow into the central_revenue table.
+// It ensures the referenced tenant exists (creating a stub if absent) then
+// maps RevenueRow fields to CentralRevenueRow and delegates to CreateCentralRevenue.
+func (s *Store) RecordCentralRevenue(ctx context.Context, r *RevenueRow) error {
+	// Ensure the tenant exists to satisfy the FK constraint.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO tenants (tenant_id, name) VALUES (?, '')`, r.TenantID); err != nil {
+		return fmt.Errorf("failed to ensure tenant: %w", err)
+	}
+	row := &CentralRevenueRow{
+		RevenueID:      r.RevenueID,
+		TransactionID:  r.TransactionID,
+		TenantID:       r.TenantID,
+		TotalAmount:    r.TotalAmount,
+		CentralFee:     r.CentralFee,
+		ProducerPayout: r.ProducerPayout,
+		ProcessorFee:   r.ProcessorFee,
+		Currency:       r.Currency,
+		SettledAt:      r.SettledAt,
+		CreatedAt:      r.CreatedAt,
+	}
+	return s.CreateCentralRevenue(ctx, row)
 }
 
 // ---------------------------------------------------------------------------

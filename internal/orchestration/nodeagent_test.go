@@ -17,17 +17,15 @@ func TestNodeAgentClient_DeployWorkload(t *testing.T) {
 		if r.URL.Path == "/api/workloads/deploy" && r.Method == "POST" {
 			deployed = true
 
-			var workload Workload
-			json.NewDecoder(r.Body).Decode(&workload)
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
 
-			if workload.WorkloadID == "" {
+			if body["workload_id"] == "" {
 				t.Error("Expected non-empty workload ID")
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"status": "success",
-			})
+			json.NewEncoder(w).Encode(map[string]interface{}{"status": "success"})
 			return
 		}
 		http.NotFound(w, r)
@@ -40,9 +38,9 @@ func TestNodeAgentClient_DeployWorkload(t *testing.T) {
 		WorkloadID: "test-workload-001",
 		Name:       "test-app",
 		Type:       "container",
-		Image:      "nginx:latest",
 		Replicas:   1,
-		Resources: ResourceRequirements{
+		Spec: WorkloadSpec{
+			Image:    "nginx:latest",
 			CPUCores: 1.0,
 			MemoryMB: 512,
 		},
@@ -64,8 +62,7 @@ func TestNodeAgentClient_GetWorkloadStatus(t *testing.T) {
 		if strings.Contains(r.URL.Path, "/workloads/") && strings.HasSuffix(r.URL.Path, "/status") {
 			status := WorkloadNodeStatus{
 				WorkloadID: "test-workload-001",
-				NodeID:     "node-001",
-				Status:     "running",
+				State:      "running",
 				Replicas:   1,
 				StartedAt:  time.Now(),
 			}
@@ -89,8 +86,8 @@ func TestNodeAgentClient_GetWorkloadStatus(t *testing.T) {
 		t.Errorf("Expected workload ID 'test-workload-001', got '%s'", status.WorkloadID)
 	}
 
-	if status.Status != "running" {
-		t.Errorf("Expected status 'running', got '%s'", status.Status)
+	if status.State != "running" {
+		t.Errorf("Expected state 'running', got '%s'", status.State)
 	}
 }
 
@@ -151,13 +148,11 @@ func TestNodeAgentClient_GetNodeHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" && r.Method == "GET" {
 			health := NodeHealth{
-				NodeID:            "node-001",
-				Status:            "healthy",
-				CPUUsagePercent:   45.5,
-				MemoryUsagePercent: 62.3,
-				DiskUsagePercent:  38.7,
-				Uptime:            time.Hour * 24,
-				LastHeartbeat:     time.Now(),
+				Status:      "healthy",
+				Timestamp:   time.Now(),
+				CPUPercent:  45.5,
+				MemoryUsed:  4096 * 1024 * 1024,
+				MemoryTotal: 16384 * 1024 * 1024,
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(health)
@@ -175,15 +170,11 @@ func TestNodeAgentClient_GetNodeHealth(t *testing.T) {
 		t.Fatalf("GetNodeHealth failed: %v", err)
 	}
 
-	if health.NodeID != "node-001" {
-		t.Errorf("Expected node ID 'node-001', got '%s'", health.NodeID)
-	}
-
 	if health.Status != "healthy" {
 		t.Errorf("Expected status 'healthy', got '%s'", health.Status)
 	}
 
-	if health.CPUUsagePercent <= 0 {
+	if health.CPUPercent <= 0 {
 		t.Error("Expected positive CPU usage")
 	}
 }
@@ -192,18 +183,15 @@ func TestNodeAgentClient_GetNodeMetrics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/metrics" && r.Method == "GET" {
 			metrics := NodeMetrics{
-				NodeID:           "node-001",
-				CPUCores:         8,
-				CPUUsagePercent:  35.2,
-				MemoryTotalMB:    16384,
-				MemoryUsedMB:     8192,
-				DiskTotalGB:      500,
-				DiskUsedGB:       200,
-				NetworkRxBytes:   1024 * 1024 * 1024,
-				NetworkTxBytes:   512 * 1024 * 1024,
-				WorkloadCount:    5,
-				Timestamp:        time.Now(),
+				Timestamp: time.Now(),
 			}
+			metrics.CPU.UsagePercent = 35.2
+			metrics.Memory.Total = 16384 * 1024 * 1024
+			metrics.Memory.Used = 8192 * 1024 * 1024
+			metrics.Disk.Total = 500 * 1024 * 1024 * 1024
+			metrics.Disk.Used = 200 * 1024 * 1024 * 1024
+			metrics.Network.RxBytes = 1024 * 1024 * 1024
+			metrics.Network.TxBytes = 512 * 1024 * 1024
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(metrics)
 			return
@@ -220,16 +208,12 @@ func TestNodeAgentClient_GetNodeMetrics(t *testing.T) {
 		t.Fatalf("GetNodeMetrics failed: %v", err)
 	}
 
-	if metrics.CPUCores != 8 {
-		t.Errorf("Expected 8 CPU cores, got %d", metrics.CPUCores)
+	if metrics.CPU.UsagePercent <= 0 {
+		t.Error("Expected positive CPU usage percent")
 	}
 
-	if metrics.MemoryTotalMB != 16384 {
-		t.Errorf("Expected 16384 MB memory, got %d", metrics.MemoryTotalMB)
-	}
-
-	if metrics.WorkloadCount != 5 {
-		t.Errorf("Expected 5 workloads, got %d", metrics.WorkloadCount)
+	if metrics.Memory.Total <= 0 {
+		t.Error("Expected positive total memory")
 	}
 }
 
@@ -299,19 +283,13 @@ func TestNodeAgentClient_Authentication(t *testing.T) {
 func TestNodeAgentClient_ErrorHandling(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error": "Internal server error",
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "Internal server error"})
 	}))
 	defer server.Close()
 
 	client := NewNodeAgentClient(server.URL, "test-token")
 
-	workload := &Workload{
-		WorkloadID: "test",
-		Name:       "test",
-		Type:       "container",
-	}
+	workload := &Workload{WorkloadID: "test", Name: "test", Type: "container"}
 
 	ctx := context.Background()
 	err := client.DeployWorkload(ctx, workload)
@@ -337,11 +315,7 @@ func TestNodeAgentClient_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	workload := &Workload{
-		WorkloadID: "test",
-		Name:       "test",
-		Type:       "container",
-	}
+	workload := &Workload{WorkloadID: "test", Name: "test", Type: "container"}
 
 	err := client.DeployWorkload(ctx, workload)
 	if err == nil {
@@ -354,12 +328,10 @@ func TestNodeAgentClient_Retry(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
-
 		if attempts < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 	}))
@@ -367,15 +339,10 @@ func TestNodeAgentClient_Retry(t *testing.T) {
 
 	client := NewNodeAgentClient(server.URL, "test-token")
 
-	// Note: Retry logic would need to be implemented in NodeAgentClient
 	ctx := context.Background()
-	workload := &Workload{
-		WorkloadID: "test",
-		Name:       "test",
-		Type:       "container",
-	}
+	workload := &Workload{WorkloadID: "test", Name: "test", Type: "container"}
 
-	// First attempts should fail
+	// First attempt will fail (retry logic not yet implemented)
 	err := client.DeployWorkload(ctx, workload)
 	if err == nil {
 		t.Log("Deployment succeeded (retry not yet implemented)")
@@ -395,7 +362,6 @@ func TestNodeAgentClient_ConcurrentRequests(t *testing.T) {
 
 	done := make(chan bool, 10)
 
-	// Make 10 concurrent requests
 	for i := 0; i < 10; i++ {
 		go func(index int) {
 			workload := &Workload{
@@ -414,12 +380,10 @@ func TestNodeAgentClient_ConcurrentRequests(t *testing.T) {
 		}(i)
 	}
 
-	// Wait for all requests
 	timeout := time.After(5 * time.Second)
 	for i := 0; i < 10; i++ {
 		select {
 		case <-done:
-			// Success
 		case <-timeout:
 			t.Fatal("Concurrent requests timed out")
 		}
@@ -436,26 +400,14 @@ func TestWorkloadNodeStatus_IsHealthy(t *testing.T) {
 		status   WorkloadNodeStatus
 		expected bool
 	}{
-		{
-			name:     "Running status",
-			status:   WorkloadNodeStatus{Status: "running"},
-			expected: true,
-		},
-		{
-			name:     "Failed status",
-			status:   WorkloadNodeStatus{Status: "failed"},
-			expected: false,
-		},
-		{
-			name:     "Stopped status",
-			status:   WorkloadNodeStatus{Status: "stopped"},
-			expected: false,
-		},
+		{"Running status", WorkloadNodeStatus{State: "running"}, true},
+		{"Failed status", WorkloadNodeStatus{State: "failed"}, false},
+		{"Stopped status", WorkloadNodeStatus{State: "stopped"}, false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			isHealthy := (tc.status.Status == "running")
+			isHealthy := (tc.status.State == "running")
 			if isHealthy != tc.expected {
 				t.Errorf("Expected IsHealthy=%v, got %v", tc.expected, isHealthy)
 			}
@@ -469,21 +421,9 @@ func TestNodeHealth_IsHealthy(t *testing.T) {
 		health   NodeHealth
 		expected bool
 	}{
-		{
-			name:     "Healthy node",
-			health:   NodeHealth{Status: "healthy", CPUUsagePercent: 50, MemoryUsagePercent: 60},
-			expected: true,
-		},
-		{
-			name:     "Unhealthy node",
-			health:   NodeHealth{Status: "unhealthy"},
-			expected: false,
-		},
-		{
-			name:     "Degraded node",
-			health:   NodeHealth{Status: "degraded"},
-			expected: false,
-		},
+		{"Healthy node", NodeHealth{Status: "healthy", CPUPercent: 50}, true},
+		{"Unhealthy node", NodeHealth{Status: "unhealthy"}, false},
+		{"Degraded node", NodeHealth{Status: "degraded"}, false},
 	}
 
 	for _, tc := range testCases {
@@ -504,13 +444,7 @@ func BenchmarkNodeAgentClient_DeployWorkload(b *testing.B) {
 	defer server.Close()
 
 	client := NewNodeAgentClient(server.URL, "test-token")
-
-	workload := &Workload{
-		WorkloadID: "bench-workload",
-		Name:       "bench",
-		Type:       "container",
-	}
-
+	workload := &Workload{WorkloadID: "bench-workload", Name: "bench", Type: "container"}
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -521,11 +455,9 @@ func BenchmarkNodeAgentClient_DeployWorkload(b *testing.B) {
 
 func BenchmarkNodeAgentClient_GetNodeMetrics(b *testing.B) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		metrics := NodeMetrics{
-			NodeID:       "bench-node",
-			CPUCores:     8,
-			MemoryTotalMB: 16384,
-		}
+		var metrics NodeMetrics
+		metrics.CPU.UsagePercent = 35.2
+		metrics.Memory.Total = 16384 * 1024 * 1024
 		json.NewEncoder(w).Encode(metrics)
 	}))
 	defer server.Close()

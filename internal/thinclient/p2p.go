@@ -453,7 +453,7 @@ func (p *P2PNetwork) handleAuth(ctx context.Context, conn net.Conn) {
 		Score:     0,
 	}
 	capData, _ := json.Marshal(localCap)
-	capLen := uint32(len(capData))
+	capLen := uint32(len(capData)) // #nosec G115 -- JSON capability payload is always well under 4 GiB
 	if err := binary.Write(conn, binary.BigEndian, capLen); err != nil {
 		log.Printf("[p2p] failed to send capability length: %v", err)
 		return
@@ -553,7 +553,7 @@ func (p *P2PNetwork) handleVoteRequest(_ context.Context, conn net.Conn) {
 	}
 
 	respData, _ := json.Marshal(resp)
-	respLen := uint32(len(respData))
+	respLen := uint32(len(respData)) // #nosec G115 -- JSON response payload is always well under 4 GiB
 	_ = binary.Write(conn, binary.BigEndian, respLen)
 	_, _ = conn.Write(respData)
 }
@@ -743,7 +743,7 @@ func (p *P2PNetwork) requestVote(peer *Peer, block Block) (Vote, error) {
 	if err != nil {
 		return Vote{}, fmt.Errorf("marshal block: %w", err)
 	}
-	blockLen := uint32(len(blockData))
+	blockLen := uint32(len(blockData)) // #nosec G115 -- serialized block payload is always well under 4 GiB
 	if err := binary.Write(conn, binary.BigEndian, blockLen); err != nil {
 		return Vote{}, fmt.Errorf("write block length: %w", err)
 	}

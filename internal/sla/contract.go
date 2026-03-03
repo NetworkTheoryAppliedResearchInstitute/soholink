@@ -118,7 +118,8 @@ func DefaultContracts() map[TierLevel]ContractTemplate {
 				TierCredits: map[string]float64{
 					"99.5-99.9": 10.0,
 					"99.0-99.5": 25.0,
-					"<99.0":     50.0,
+					"98.0-99.0": 25.0,
+					"<98.0":     50.0,
 				},
 				MaxCredit: 50.0,
 			},

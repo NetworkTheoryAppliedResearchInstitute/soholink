@@ -43,8 +43,11 @@ func ValidatePath(basePath, userPath string) (string, error) {
 		return "", fmt.Errorf("invalid base path: %w", err)
 	}
 
-	// If it's an absolute path, verify it starts with basePath
-	if filepath.IsAbs(cleanPath) {
+	// If it's an absolute path (or root-relative on Windows), verify it starts with basePath.
+	// On Windows, filepath.IsAbs returns false for Unix-style paths like "/etc/shadow" (no drive
+	// letter), but they are still rooted and must not escape the base directory.
+	isRooted := filepath.IsAbs(cleanPath) || (len(cleanPath) > 0 && (cleanPath[0] == '/' || cleanPath[0] == '\\'))
+	if isRooted {
 		// Convert to absolute to handle cross-platform issues
 		// On Windows, Unix paths like "/etc/passwd" become "C:\etc\passwd"
 		absClean, err := filepath.Abs(cleanPath)

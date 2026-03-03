@@ -2,9 +2,18 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
+
+func createTestTenant(t *testing.T, s *Store, ctx context.Context, tenantID string) {
+	t.Helper()
+	tenant := &TenantRow{TenantID: tenantID, Name: "Test Tenant", Status: "active"}
+	if err := s.CreateTenant(ctx, tenant); err != nil {
+		t.Fatalf("failed to create test tenant %s: %v", tenantID, err)
+	}
+}
 
 func TestGetTotalRevenue(t *testing.T) {
 	s, err := NewMemoryStore()
@@ -14,6 +23,7 @@ func TestGetTotalRevenue(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
+	createTestTenant(t, s, ctx, "tenant1")
 
 	// Initially should be zero
 	total, err := s.GetTotalRevenue(ctx)
@@ -75,6 +85,7 @@ func TestGetRevenueSince(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
+	createTestTenant(t, s, ctx, "tenant1")
 
 	now := time.Now()
 	yesterday := now.Add(-24 * time.Hour)
@@ -156,6 +167,7 @@ func TestGetPendingPayout(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
+	createTestTenant(t, s, ctx, "tenant1")
 
 	// Add settled and unsettled revenue
 	settledTime := time.Now()
@@ -227,6 +239,7 @@ func TestGetRecentRevenue(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
+	createTestTenant(t, s, ctx, "tenant1")
 
 	// Add multiple revenue entries
 	for i := 0; i < 5; i++ {
@@ -366,6 +379,7 @@ func TestGetRevenueByType(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
+	createTestTenant(t, s, ctx, "tenant1")
 
 	// Create resource transactions
 	txs := []struct {

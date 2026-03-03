@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // GPUDevice represents a GPU available for passthrough.
@@ -43,6 +44,13 @@ type GPUManager struct {
 
 	// vfio-pci driver path
 	vfioPCIPath string
+
+	// sysfs base path (defaults to /sys, configurable for testing)
+	sysfsPath string
+
+	// GPU-to-VM attachment tracking
+	mu          sync.RWMutex
+	attachments map[string]string // pciAddr -> vmID
 }
 
 // NewGPUManager creates a new GPU passthrough manager.
@@ -50,6 +58,8 @@ func NewGPUManager() (*GPUManager, error) {
 	gm := &GPUManager{
 		devices:     make(map[string]*GPUDevice),
 		vfioPCIPath: "/sys/bus/pci/drivers/vfio-pci",
+		sysfsPath:   "/sys",
+		attachments: make(map[string]string),
 	}
 
 	// Detect available GPUs
@@ -312,8 +322,8 @@ func (gm *GPUManager) DisableSRIOV(pciAddr string) error {
 	return nil
 }
 
-// GetIOMMUGroup returns all devices in the same IOMMU group.
-func (gm *GPUManager) GetIOMMUGroup(groupID int) []*GPUDevice {
+// GetDevicesByIOMMUGroup returns all devices in the same IOMMU group.
+func (gm *GPUManager) GetDevicesByIOMMUGroup(groupID int) []*GPUDevice {
 	devices := make([]*GPUDevice, 0)
 	for _, dev := range gm.devices {
 		if dev.IOMMUGroup == groupID {
@@ -321,6 +331,48 @@ func (gm *GPUManager) GetIOMMUGroup(groupID int) []*GPUDevice {
 		}
 	}
 	return devices
+}
+
+// GetIOMMUGroup returns the IOMMU group number for a given PCI address.
+func (gm *GPUManager) GetIOMMUGroup(pciAddr string) (int, error) {
+	dev, ok := gm.devices[pciAddr]
+	if !ok {
+		return 0, fmt.Errorf("GPU not found: %s", pciAddr)
+	}
+	return dev.IOMMUGroup, nil
+}
+
+// ListDevicesInIOMMUGroup returns PCI addresses of devices in the given IOMMU group.
+func (gm *GPUManager) ListDevicesInIOMMUGroup(groupID int) ([]string, error) {
+	addrs := make([]string, 0)
+	for addr, dev := range gm.devices {
+		if dev.IOMMUGroup == groupID {
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs, nil
+}
+
+// AttachToVM records a GPU-to-VM attachment.
+func (gm *GPUManager) AttachToVM(pciAddr, vmID string) error {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	if attached, ok := gm.attachments[pciAddr]; ok {
+		return fmt.Errorf("GPU %s already attached to VM %s", pciAddr, attached)
+	}
+	gm.attachments[pciAddr] = vmID
+	return nil
+}
+
+// DetachFromVM removes a GPU-to-VM attachment.
+func (gm *GPUManager) DetachFromVM(pciAddr, vmID string) error {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	if attached, ok := gm.attachments[pciAddr]; !ok || attached != vmID {
+		return fmt.Errorf("GPU %s not attached to VM %s", pciAddr, vmID)
+	}
+	delete(gm.attachments, pciAddr)
+	return nil
 }
 
 // AttachGPUToVM attaches a GPU to a VM via QEMU command line.
@@ -383,6 +435,18 @@ func (gm *GPUManager) CheckIOMMU() (bool, error) {
 	}
 
 	return false, nil
+}
+
+// ValidateIOMMU checks whether IOMMU is enabled and functional for the given PCI address.
+func (gm *GPUManager) ValidateIOMMU(pciAddr string) error {
+	ok, err := gm.CheckIOMMU()
+	if err != nil {
+		return fmt.Errorf("IOMMU check failed: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("IOMMU not enabled for %s", pciAddr)
+	}
+	return nil
 }
 
 // LoadVFIOModules loads required kernel modules for VFIO.

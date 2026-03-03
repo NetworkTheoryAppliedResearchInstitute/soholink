@@ -1,301 +1,146 @@
-name: Build and Package
+name: Build and Release
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Trigger policy
+#   • Every push to main/develop → snapshot build (no git tag needed)
+#   • Every PR against main      → snapshot build (no upload)
+#   • Push of a v* tag           → real release, published to GitHub Releases
+# ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
-    branches: [ main, develop ]
-    tags:
-      - 'v*'
+    branches: [main, develop]
+    tags:     ['v*']
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  GO_VERSION: '1.21'
+  GO_VERSION: '1.24.6'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 1 — Tests (headless CLI only; GUI requires CGO + display server)
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
-  # Run tests first
   test:
+    name: Test (headless)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          cache: true
 
       - name: Download dependencies
         run: go mod download
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./internal/...
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: ./coverage.txt
           flags: unittests
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  # Build binaries for all platforms
-  build:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2 — GoReleaser (snapshot on branch push; real release on tag push)
+  #
+  # What GoReleaser produces in one job (from .goreleaser.yml):
+  #   Windows   → soholink-gui_*_windows_amd64.zip  (statically linked .exe)
+  #               SoHoLINK-Setup.exe                (NSIS installer, if makensis present)
+  #   macOS     → soholink-gui_*_macOS_universal.tar.gz  (Intel + Apple Silicon)
+  #               SoHoLINK-*.pkg                    (if build-pkg.sh present)
+  #   Linux     → soholink-gui_*_linux_amd64.tar.gz
+  #               FedAAA-*-x86_64.AppImage          (if appimagetool present)
+  #               soholink_*.deb  soholink-*.rpm     (nFPM)
+  #   CLI       → soholink_*_{linux,macOS,windows}_*.tar.gz / .zip
+  #   Checksums → soholink_*_checksums.txt
+  # ─────────────────────────────────────────────────────────────────────────
+  goreleaser:
+    name: GoReleaser (${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'snapshot' }})
+    runs-on: ubuntu-latest
     needs: test
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            artifact: fedaaa-linux-amd64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: arm64
-            artifact: fedaaa-linux-arm64
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-            artifact: fedaaa-darwin-amd64
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-            artifact: fedaaa-darwin-arm64
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-            artifact: fedaaa-windows-amd64.exe
 
-    runs-on: ${{ matrix.os }}
+    # Give the job permission to create GitHub Releases
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # GoReleaser needs full history for changelog
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      # ── Go toolchain ────────────────────────────────────────────────────
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Get version
-        id: version
-        shell: bash
+      # ── MinGW cross-compiler for Windows GUI (static linking) ──────────
+      # CGO_ENABLED=1 + x86_64-w64-mingw32-gcc → produces zero-DLL Windows .exe
+      - name: Install MinGW cross-compiler
         run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION=$(git describe --tags --always --dirty)
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64
 
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+      # ── NSIS (optional — builds SoHoLINK-Setup.exe installer) ──────────
+      - name: Install NSIS
+        run: sudo apt-get install -y --no-install-recommends nsis
+
+      # ── AppImage tool (optional — builds Linux AppImage) ───────────────
+      - name: Install appimagetool
         run: |
-          go build -v -trimpath \
-            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }} -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -o dist/${{ matrix.artifact }} \
-            ./cmd/fedaaa
+          curl -sSfL \
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -o /usr/local/bin/appimagetool
+          chmod +x /usr/local/bin/appimagetool
+          # AppImage binaries require FUSE; use the extract-and-run workaround in CI
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
 
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v3
+      # ── Download Go module dependencies ────────────────────────────────
+      - name: Download dependencies
+        run: go mod download
+
+      # ── GoReleaser — snapshot (branches / PRs) ──────────────────────────
+      - name: Run GoReleaser (snapshot)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: goreleaser/goreleaser-action@v6
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}
-          retention-days: 7
-
-  # Package for Linux distributions
-  package-linux:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Linux AMD64 binary
-        uses: actions/download-artifact@v3
-        with:
-          name: fedaaa-linux-amd64
-          path: dist/
-
-      - name: Download Linux ARM64 binary
-        uses: actions/download-artifact@v3
-        with:
-          name: fedaaa-linux-arm64
-          path: dist/
-
-      - name: Install nFPM
-        run: |
-          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
-          sudo apt-get update
-          sudo apt-get install -y nfpm
-
-      - name: Get version
-        id: version
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION="0.0.0-dev"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Package DEB (AMD64)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          chmod +x dist/fedaaa-linux-amd64
-          nfpm package --packager deb --target dist/ -f packaging/linux/nfpm.yaml
-          mv dist/fedaaa_${VERSION}_amd64.deb dist/fedaaa_${VERSION}_amd64.deb || true
-
-      - name: Package RPM (AMD64)
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          nfpm package --packager rpm --target dist/ -f packaging/linux/nfpm.yaml
-
-      - name: Build AppImage
-        run: |
-          chmod +x dist/fedaaa-linux-amd64
-          bash packaging/linux/build-appimage.sh
-
-      - name: Upload Linux packages
-        uses: actions/upload-artifact@v3
-        with:
-          name: linux-packages
-          path: |
-            dist/*.deb
-            dist/*.rpm
-            dist/*.AppImage
-
-  # Package for macOS
-  package-macos:
-    needs: build
-    runs-on: macos-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download macOS AMD64 binary
-        uses: actions/download-artifact@v3
-        with:
-          name: fedaaa-darwin-amd64
-          path: dist/
-
-      - name: Download macOS ARM64 binary
-        uses: actions/download-artifact@v3
-        with:
-          name: fedaaa-darwin-arm64
-          path: dist/
-
-      - name: Get version
-        id: version
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION="0.0.0-dev"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Create universal binary
-        run: |
-          chmod +x dist/fedaaa-darwin-amd64 dist/fedaaa-darwin-arm64
-          lipo -create -output dist/fedaaa dist/fedaaa-darwin-amd64 dist/fedaaa-darwin-arm64
-
-      - name: Build PKG installer
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          bash packaging/macos/build-pkg.sh
-
-      - name: Upload macOS package
-        uses: actions/upload-artifact@v3
-        with:
-          name: macos-packages
-          path: dist/*.pkg
-
-  # Package for Windows
-  package-windows:
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Windows binary
-        uses: actions/download-artifact@v3
-        with:
-          name: fedaaa-windows-amd64.exe
-          path: dist/
-
-      - name: Install WiX
-        run: |
-          dotnet tool install --global wix --version 4.0.5
-
-      - name: Get version
-        id: version
-        shell: bash
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION="0.0.0"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Build MSI installer
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
-        shell: bash
-        run: |
-          bash packaging/windows/build-msi.sh
-
-      - name: Upload Windows package
-        uses: actions/upload-artifact@v3
-        with:
-          name: windows-packages
-          path: dist/*.msi
-
-  # Create GitHub release on tags
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [package-linux, package-macos, package-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: artifacts/
-
-      - name: Create checksums
-        run: |
-          cd artifacts
-          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.pkg" -o -name "*.msi" -o -name "fedaaa-*" \) -exec sha256sum {} \; > SHA256SUMS.txt
-
-      - name: Create release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
-            artifacts/**/*.AppImage
-            artifacts/**/*.pkg
-            artifacts/**/*.msi
-            artifacts/**/fedaaa-*
-            artifacts/SHA256SUMS.txt
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+          distribution: goreleaser
+          version:      '~> v2'
+          args:         release --snapshot --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOPATH:       ${{ github.workspace }}/go
+
+      # ── GoReleaser — real release (tags only) ───────────────────────────
+      - name: Run GoReleaser (release)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version:      '~> v2'
+          args:         release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOPATH:       ${{ github.workspace }}/go
+
+      # ── Upload snapshot artifacts for inspection ─────────────────────────
+      - name: Upload snapshot artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-packages-${{ github.sha }}
+          retention-days: 7
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.exe
+            dist/*checksums*

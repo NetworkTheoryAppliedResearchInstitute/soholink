@@ -541,6 +541,8 @@ func TestBackupManager_ConcurrentBackups(t *testing.T) {
 			backup, err := manager.BackupPostgreSQL(ctx, instance, config)
 			if err != nil {
 				t.Errorf("Concurrent backup %d failed: %v", index, err)
+				done <- ""
+				return
 			}
 
 			done <- backup.BackupID

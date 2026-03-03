@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/governance"
@@ -14,6 +16,60 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestration"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
+
+// ---------------------------------------------------------------------------
+// Per-IP rate limiter (S2)
+// ---------------------------------------------------------------------------
+
+// ipRateLimiter is a simple per-IP sliding-window rate limiter.
+// It allows at most maxPerWindow requests per source IP per minute.
+// No external dependencies required.
+type ipRateLimiter struct {
+	mu      sync.Mutex
+	buckets map[string]*rlBucket
+}
+
+type rlBucket struct {
+	count   int
+	resetAt time.Time
+}
+
+func newIPRateLimiter() *ipRateLimiter {
+	return &ipRateLimiter{buckets: make(map[string]*rlBucket)}
+}
+
+// Allow returns true if the source IP of r has not exceeded maxPerWindow
+// requests in the current 1-minute window.
+func (l *ipRateLimiter) Allow(r *http.Request, maxPerWindow int) bool {
+	ip := clientIP(r)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	b, ok := l.buckets[ip]
+	if !ok || now.After(b.resetAt) {
+		l.buckets[ip] = &rlBucket{count: 1, resetAt: now.Add(time.Minute)}
+		return true
+	}
+	b.count++
+	return b.count <= maxPerWindow
+}
+
+// clientIP returns the originating IP for a request, respecting
+// X-Forwarded-For when set (e.g. behind a trusted reverse proxy).
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Use only the first (leftmost) address — closest to the client.
+		if idx := strings.IndexByte(xff, ','); idx >= 0 {
+			xff = xff[:idx]
+		}
+		return strings.TrimSpace(xff)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 // Server provides the HTTP API for resource sharing operations.
 type Server struct {
@@ -23,6 +79,8 @@ type Server struct {
 	governance     *governance.Manager
 	serviceManager ServiceManager
 	storageBackend StorageBackend
+	mobileHub      *MobileHub
+	rateLimiter    *ipRateLimiter // S2: per-IP rate limiter for mobile endpoints
 	listenAddr     string
 	server         *http.Server
 }
@@ -30,9 +88,10 @@ type Server struct {
 // NewServer creates a new HTTP API server.
 func NewServer(s *store.Store, lm *lbtas.Manager, listenAddr string) *Server {
 	return &Server{
-		store:      s,
-		lbtas:      lm,
-		listenAddr: listenAddr,
+		store:       s,
+		lbtas:       lm,
+		listenAddr:  listenAddr,
+		rateLimiter: newIPRateLimiter(),
 	}
 }
 
@@ -44,6 +103,11 @@ func (s *Server) SetScheduler(sched *orchestration.FedScheduler) {
 // SetGovernance sets the governance manager (optional, for governance API).
 func (s *Server) SetGovernance(gov *governance.Manager) {
 	s.governance = gov
+}
+
+// SetMobileHub sets the mobile WebSocket hub (optional, for mobile node API).
+func (s *Server) SetMobileHub(hub *MobileHub) {
+	s.mobileHub = hub
 }
 
 // Start begins listening for HTTP API requests.
@@ -98,6 +162,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/governance/proposals/", s.handleGovernanceProposal)
 	mux.HandleFunc("/api/governance/vote", s.handleGovernanceVote)
 
+	// Mobile node endpoints (v0.2)
+	mux.HandleFunc("/ws/nodes", s.handleMobileWS)
+	mux.HandleFunc("/api/v1/nodes/mobile/register", s.handleMobileRegister)
+	mux.HandleFunc("/api/v1/nodes/mobile", s.handleListMobileNodes)
+
 	s.server = &http.Server{
 		Addr:         s.listenAddr,
 		Handler:      mux,
@@ -106,7 +175,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	log.Printf("[httpapi] API server listening on %s", s.listenAddr)
-	go func() {
+	go func() { // #nosec G118 -- context.Background() intentional: shutdown must complete regardless of parent context cancellation
 		<-ctx.Done()
 		s.server.Shutdown(context.Background())
 	}()
@@ -276,6 +345,14 @@ func (s *Server) handleFederationRevenue(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Ensure slices are non-nil for JSON serialisation
+	if recentRevenue == nil {
+		recentRevenue = []store.RevenueRow{}
+	}
+	if activeRentals == nil {
+		activeRentals = []store.ActiveRentalRow{}
+	}
+
 	// Build response
 	response := FederationRevenueResponse{
 		TotalRevenue:  totalRevenue,
@@ -358,7 +435,7 @@ type WorkloadStatusResponse struct {
 	WorkloadID string                            `json:"workload_id"`
 	Status     string                            `json:"status"`
 	Replicas   int                               `json:"replicas"`
-	Placements []orchestration.Placement         `json:"placements,omitempty"`
+	Placements []orchestration.Placement         `json:"placements"`
 	CreatedAt  time.Time                         `json:"created_at"`
 	UpdatedAt  time.Time                         `json:"updated_at"`
 }
@@ -393,13 +470,24 @@ func (s *Server) handleWorkloadStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	placements := state.Placements
+	if placements == nil {
+		placements = []orchestration.Placement{}
+	}
 	response := WorkloadStatusResponse{
-		WorkloadID: state.Workload.WorkloadID,
-		Status:     state.Workload.Status,
-		Replicas:   state.Workload.Replicas,
-		Placements: state.Placements,
-		CreatedAt:  state.Workload.CreatedAt,
-		UpdatedAt:  state.Workload.UpdatedAt,
+		WorkloadID: state.WorkloadID,
+		Status:     state.Status,
+		Replicas:   state.DesiredReplicas,
+		Placements: placements,
+		CreatedAt:  state.CreatedAt,
+		UpdatedAt:  state.UpdatedAt,
+	}
+	if state.Workload != nil {
+		response.WorkloadID = state.Workload.WorkloadID
+		response.Status = state.Workload.Status
+		response.Replicas = state.Workload.Replicas
+		response.CreatedAt = state.Workload.CreatedAt
+		response.UpdatedAt = state.Workload.UpdatedAt
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -627,5 +715,125 @@ func (s *Server) handleGovernanceVote(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"vote_id": vote.VoteID,
 		"message": "Vote cast successfully",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Mobile node endpoints (v0.2)
+// ---------------------------------------------------------------------------
+
+// handleMobileWS upgrades an HTTP connection to a WebSocket connection and
+// hands it off to the MobileHub.  Path: GET /ws/nodes
+func (s *Server) handleMobileWS(w http.ResponseWriter, r *http.Request) {
+	if s.mobileHub == nil {
+		http.Error(w, "Mobile hub not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// S2: Limit WebSocket upgrade attempts to 30 per IP per minute to
+	// mitigate trivial connection-flood DoS attacks.
+	if !s.rateLimiter.Allow(r, 30) {
+		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+		return
+	}
+	s.mobileHub.ServeWS(w, r)
+}
+
+// MobileRegisterRequest is the JSON body for POST /api/v1/nodes/mobile/register.
+// Mobile nodes may call this REST endpoint before (or instead of) opening a
+// WebSocket, to pre-register metadata with the coordinator.
+type MobileRegisterRequest struct {
+	NodeDID   string                          `json:"node_did"`
+	NodeClass orchestration.NodeClass         `json:"node_class"`
+	NodeInfo  orchestration.MobileNodeInfo    `json:"node_info"`
+}
+
+// MobileRegisterResponse is returned on a successful registration.
+type MobileRegisterResponse struct {
+	Status     string `json:"status"`
+	WSEndpoint string `json:"ws_endpoint"` // where the node should connect
+}
+
+// handleMobileRegister handles POST /api/v1/nodes/mobile/register.
+func (s *Server) handleMobileRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req MobileRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// S2: Limit pre-registration calls to 20 per IP per minute.
+	if !s.rateLimiter.Allow(r, 20) {
+		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+		return
+	}
+
+	if req.NodeDID == "" {
+		http.Error(w, "Missing node_did", http.StatusBadRequest)
+		return
+	}
+	if req.NodeClass == "" {
+		http.Error(w, "Missing node_class", http.StatusBadRequest)
+		return
+	}
+
+	// S1: Validate node_class against the known set of constants.
+	validClasses := map[orchestration.NodeClass]bool{
+		orchestration.NodeClassDesktop:       true,
+		orchestration.NodeClassMobileAndroid: true,
+		orchestration.NodeClassMobileIOS:     true,
+		orchestration.NodeClassAndroidTV:     true,
+	}
+	if !validClasses[req.NodeClass] {
+		http.Error(w, fmt.Sprintf(
+			"unknown node_class %q; valid values: desktop, mobile-android, mobile-ios, android-tv",
+			req.NodeClass), http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("[httpapi] mobile node pre-registered: did=%s class=%s", req.NodeDID, req.NodeClass)
+
+	resp := MobileRegisterResponse{
+		Status:     "ok",
+		WSEndpoint: "/ws/nodes",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleListMobileNodes handles GET /api/v1/nodes/mobile.
+// Returns the list of currently connected mobile nodes from the hub.
+func (s *Server) handleListMobileNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.mobileHub == nil {
+		// Hub not configured — return empty list rather than an error so
+		// dashboard polling does not break before the hub is wired up.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"nodes": []interface{}{},
+			"total": 0,
+		})
+		return
+	}
+
+	nodes := s.mobileHub.ActiveNodes()
+	if nodes == nil {
+		nodes = []orchestration.MobileNodeInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"nodes": nodes,
+		"total": len(nodes),
 	})
 }

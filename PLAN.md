@@ -1,4 +1,9 @@
-# SoHoLINK: Plan to Close All Documentation-to-Code Gaps
+# SoHoLINK: Gap Analysis (Legacy Task Tracker)
+
+> **This file is the original gap-analysis document.** For current forward planning see [`ROADMAP.md`](ROADMAP.md).
+> For the complete change history see [`CHANGELOG.md`](CHANGELOG.md).
+>
+> Status key: ✅ COMPLETED · 🔨 IN PROGRESS · ⬜ PLANNED · ❌ DEFERRED
 
 ## Guiding Principles
 
@@ -26,7 +31,7 @@
 
 ---
 
-## GAP 2: GUI Installer (Spec says COMPLETED, code is stub-only)
+## GAP 2: GUI Installer ✅ COMPLETED (2026-03-01)
 
 **Spec says:** Fyne GUI framework, wizard screens (welcome, mode selection, SaaS config, progress, completion), cross-platform
 **Code says:** `internal/gui/dashboard/dashboard.go` has data structures only. No Fyne import. No rendering code. Fyne not in go.mod.
@@ -73,7 +78,7 @@ Each screen is a Fyne `container.NewVBox(...)` with navigation buttons calling t
 
 ---
 
-## GAP 3: Cross-Platform Packaging (Spec says COMPLETED, nothing exists)
+## GAP 3: Cross-Platform Packaging ✅ COMPLETED (2026-03-01)
 
 **Spec says:** WiX MSI (Windows), PKG (macOS), DEB/RPM/AppImage (Linux), GitHub Actions CI/CD
 **Code says:** Makefile builds a single binary. No packaging. No CI/CD.
@@ -133,7 +138,7 @@ Each screen is a Fyne `container.NewVBox(...)` with navigation buttons calling t
 
 ---
 
-## GAP 4: P2P Mesh Networking (Spec says COMPLETED, handlers are empty)
+## GAP 4: P2P Mesh Networking ⬜ PLANNED (v0.6.0)
 
 **Spec says:** mDNS discovery, gossip protocol, blockchain consensus when central offline, anti-eclipse protection
 **Code says:** `thinclient/p2p.go` has structure but `handlePeerConnection()` just closes, `collectVotes()` auto-approves, `writeBlockToCentral()` is empty
@@ -216,7 +221,7 @@ Created `internal/store/central_test.go` with:
 
 ---
 
-## GAP 6: Container Isolation — sandbox_linux.go Missing
+## GAP 6: Container Isolation ⬜ PLANNED (v0.5.0)
 
 **Spec says:** Linux namespaces (CLONE_NEW*), cgroups, seccomp, AppArmor profiles
 **Code says:** `sandbox.go` references `sandbox_linux.go` which does not exist. Falls back to basic `exec.Command()`.
@@ -276,7 +281,7 @@ Implement `executeLinux()`:
 
 ---
 
-## GAP 7: Hypervisor Backends (Simulation only, no actual VM launch)
+## GAP 7: Hypervisor Backends ⬜ PLANNED (v0.8.0)
 
 **Spec says:** KVM/QEMU with AMD SEV, Hyper-V with VBS, actual VM lifecycle
 **Code says:** `kvm.go` and `hyperv.go` simulate with goroutine + sleep, never exec QEMU or PowerShell
@@ -384,7 +389,7 @@ Create `internal/blockchain/ethereum.go`:
 
 ---
 
-## GAP 9: Payment Processor Implementations (Stripe + Lightning are stubs)
+## GAP 9: Payment Processor Implementations ✅ COMPLETED (2026-03-01)
 
 **Spec says:** Stripe (2.9% + $0.30), Bitcoin Lightning (<0.1%), Federation Tokens (0%)
 **Code says:** `stripe.go` and `lightning.go` return "not yet implemented" for all methods. `fedtoken.go` has partial CreateCharge only.
@@ -446,7 +451,7 @@ In `internal/payment/barter.go`:
 
 ---
 
-## GAP 10: Managed Service Provisioning (Interface only, no actual provisioning)
+## GAP 10: Managed Service Provisioning ⬜ PLANNED (v0.9.0)
 
 **Spec says:** Create actual PostgreSQL, S3, RabbitMQ instances on federation nodes
 **Code says:** `Provision()` creates metadata records but doesn't deploy anything. Health checks return true. Metrics return zero.
@@ -543,7 +548,7 @@ Created `internal/cdn/router_test.go` with:
 
 ---
 
-## GAP 13: AGPL Compliance Infrastructure (If AGPL chosen in Gap 1)
+## GAP 13: AGPL Compliance Infrastructure ⬜ PLANNED (v1.0.0)
 
 **Spec says:** `/source` HTTP endpoint, source bundled in installer, NOTICE.txt
 **Code says:** No `/source` endpoint, no source bundling, no NOTICE.txt
@@ -577,7 +582,7 @@ In `internal/httpapi/server.go`:
 
 ---
 
-## GAP 14: Auto-Update System (Not implemented)
+## GAP 14: Auto-Update System ⬜ PLANNED (v1.0.0)
 
 **Spec says:** Auto-update for thin clients, signature verification
 **Code says:** No update mechanism exists
@@ -614,7 +619,7 @@ Create `internal/update/applier.go`:
 
 ---
 
-## GAP 15: Orchestration — Actual Node Deployment
+## GAP 15: Orchestration — Actual Node Deployment 🔨 IN PROGRESS (partial — HTTP API exists; scheduler still records DB placements only)
 
 **Spec says:** FedScheduler deploys workloads to nodes via node API
 **Code says:** `scheduleWorkload()` creates Placement DB records but never calls any node API
@@ -650,7 +655,7 @@ In `internal/orchestration/scheduler.go`:
 
 ---
 
-## GAP 16: HTTP API Completeness
+## GAP 16: HTTP API Completeness 🔨 IN PROGRESS (core endpoints implemented; governance + storage + full resource discovery pending)
 
 **Spec says:** Full REST API for workloads, services, storage, revenue, governance
 **Code says:** Only health, LBTAS score, LBTAS rating, and resource discovery (stub) endpoints exist
@@ -701,7 +706,7 @@ In `internal/orchestration/scheduler.go`:
 
 ---
 
-## GAP 17: Spec Document Accuracy Updates
+## GAP 17: Spec Document Accuracy Updates ✅ COMPLETED (2026-03-02)
 
 **The spec must be updated to reflect reality.** These changes are documentation-only.
 
@@ -795,9 +800,54 @@ In `internal/orchestration/scheduler.go`:
 - GAP 16: HTTP API
 
 ### Large Effort (2-4 weeks each):
-- GAP 2: GUI installer
-- GAP 3: Packaging + CI/CD
-- GAP 6: Container isolation
-- GAP 7: Hypervisor backends
-- GAP 8: Blockchain
-- GAP 10: Managed services
+- GAP 2: GUI installer ✅ DONE
+- GAP 3: Packaging + CI/CD ✅ DONE
+- GAP 6: Container isolation (⬜ v0.5.0)
+- GAP 7: Hypervisor backends (⬜ v0.8.0)
+- GAP 8: Blockchain ✅ DONE
+- GAP 10: Managed services (⬜ v0.9.0)
+
+---
+
+## Mobile Integration ✅ COMPLETED (2026-03-02)
+
+All Go-side prerequisites for mobile participation are implemented. Mobile device participation is tracked in [`docs/MOBILE_INTEGRATION.md`](docs/MOBILE_INTEGRATION.md) and [`ROADMAP.md`](ROADMAP.md). The remaining work is native app development (Kotlin/Swift) in `mobile/`.
+
+### Pre-Mobile Go Prerequisites ✅ All Completed (2026-03-02)
+
+| Task | File | Description | Status |
+|---|---|---|---|
+| M1 | `internal/orchestration/mobile.go` | `NodeClass` type + constants; `NodeConstraints` struct; wire protocol types | ✅ |
+| M2 | `internal/httpapi/mobilehub.go` | WebSocket hub (`/ws/nodes`); 30s ping; 90s heartbeat timeout | ✅ |
+| M3 | `internal/httpapi/server.go` | `POST /api/v1/nodes/mobile/register`; `GET /api/v1/nodes/mobile` | ✅ |
+| M4 | `internal/orchestration/scheduler.go` | `ScheduleMobile()`; `assignWithReplication()`; `PreemptMobileWorkload()` | ✅ |
+| M5 | `internal/orchestration/workload.go` | `CheckpointData []byte`, `SegmentIndex int`, `SegmentCount int` | ✅ |
+| M6 | `configs/policies/resource_sharing.rego` | `task_replication_factor`; `mobile_eligible_task`; `allow_mobile_task` | ✅ |
+| M7 | `internal/wasm/executor.go` | `Executor` interface; `StubExecutor`; `WithTimeout`; `TaskManifest` | ✅ |
+| M8 | `internal/payment/htlc.go` | `CreateHoldInvoice`; `SettleHoldInvoice`; `CancelHoldInvoice` | ✅ |
+| M9 | `internal/notification/apns.go` | `APNSNotifier` with JWT auto-refresh; `SendJobRequest`, `SendPaymentReceived`, `SendNodeOffline` | ✅ |
+
+---
+
+## ML-Driven Scheduling ✅ Phase 0+1 COMPLETED (2026-03-02)
+
+Contextual bandit scheduling and telemetry infrastructure are complete. For full research background see [`docs/research/ML_LOAD_BALANCING.md`](docs/research/ML_LOAD_BALANCING.md). Future phases tracked in [`ROADMAP.md`](ROADMAP.md) v0.6.0.
+
+### ML Go Infrastructure ✅ Completed (2026-03-02)
+
+| Task | File | Description | Status |
+|---|---|---|---|
+| ML-0a | `internal/ml/features.go` | Dimension constants (`ContextDim=20`); `clamp()` helper | ✅ |
+| ML-0b | `internal/ml/telemetry.go` | `TelemetryRecorder` JSONL writer; `SchedulerEvent`; `RewardFor()`; `EventBuilder` | ✅ |
+| ML-1a | `internal/ml/bandit.go` | `LinUCBBandit`: disjoint LinUCB; Gauss-Jordan inverse; `Select`/`Update`/`RemoveArm` | ✅ |
+| ML-1b | `internal/orchestration/mlfeatures.go` | `NodeFeatures`, `TaskFeatures`, `SystemFeatures`, `BuildContext`, `SystemState` | ✅ |
+| ML-1c | `internal/orchestration/scheduler.go` | `SetMLBandit()`, `SetTelemetryRecorder()`, bandit-based `ScheduleMobile()`, `RecordMobileOutcome()` | ✅ |
+| ML-R | `docs/research/ML_LOAD_BALANCING.md` | 755-line ML scheduling research report | ✅ |
+
+### ML Future Phases ⬜ (v0.6.0 Phases 2–4)
+
+| Task | File | Description | Target |
+|---|---|---|---|
+| ML-2 | `internal/ml/forecaster.go` | LSTM availability forecaster; 5/15/60-min probability per node | Q3 2026 |
+| ML-3 | `internal/ml/graph.go` | GAT graph-aware shadow pair placement; co-failure correlation | Q4 2026 |
+| ML-4 | `internal/ml/anomaly.go` | LSTM-Autoencoder + Isolation Forest; LBTAS reputation penalty | Q4 2026 |

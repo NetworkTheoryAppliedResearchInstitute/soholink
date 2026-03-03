@@ -230,6 +230,16 @@ func TestStripeProcessor_ConfirmCharge(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewStripeProcessor(tt.secretKey, "whsec_123")
 
+			// Wire mock server when test provides mock data.
+			if tt.mockBody != "" {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tt.mockStatus)
+					w.Write([]byte(tt.mockBody)) //nolint:errcheck
+				}))
+				defer srv.Close()
+				p.baseURL = srv.URL
+			}
+
 			err := p.ConfirmCharge(context.Background(), tt.chargeID)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ConfirmCharge() error = %v, wantErr %v", err, tt.wantErr)
@@ -241,18 +251,22 @@ func TestStripeProcessor_ConfirmCharge(t *testing.T) {
 // TestStripeProcessor_RefundCharge tests refund processing.
 func TestStripeProcessor_RefundCharge(t *testing.T) {
 	tests := []struct {
-		name      string
-		secretKey string
-		chargeID  string
-		reason    string
-		wantErr   bool
+		name       string
+		secretKey  string
+		chargeID   string
+		reason     string
+		mockStatus int
+		mockBody   string
+		wantErr    bool
 	}{
 		{
-			name:      "successful refund",
-			secretKey: "sk_test_123",
-			chargeID:  "pi_123456",
-			reason:    "customer_request",
-			wantErr:   false,
+			name:       "successful refund",
+			secretKey:  "sk_test_123",
+			chargeID:   "pi_123456",
+			reason:     "customer_request",
+			mockStatus: http.StatusOK,
+			mockBody:   `{"id": "re_123456", "status": "succeeded", "amount": 10000}`,
+			wantErr:    false,
 		},
 		{
 			name:      "no secret key",
@@ -266,6 +280,16 @@ func TestStripeProcessor_RefundCharge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewStripeProcessor(tt.secretKey, "whsec_123")
+
+			// Wire mock server when test provides mock data.
+			if tt.mockBody != "" {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tt.mockStatus)
+					w.Write([]byte(tt.mockBody)) //nolint:errcheck
+				}))
+				defer srv.Close()
+				p.baseURL = srv.URL
+			}
 
 			err := p.RefundCharge(context.Background(), tt.chargeID, tt.reason)
 			if (err != nil) != tt.wantErr {

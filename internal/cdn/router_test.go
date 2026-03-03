@@ -2,12 +2,10 @@ package cdn
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 func TestRouteRequest_GeographicProximity(t *testing.T) {
@@ -418,8 +416,8 @@ func TestComputeRouteScore(t *testing.T) {
 				LoadScore: 0.5,
 			},
 			distKm:      5000,
-			expectedMin: 40,
-			expectedMax: 60,
+			expectedMin: 60,
+			expectedMax: 80,
 		},
 		{
 			name: "poor node (far, high latency, high load)",

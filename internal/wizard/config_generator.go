@@ -345,7 +345,7 @@ func copyDir(src, dst string) error {
 				return err
 			}
 
-			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			if err := os.WriteFile(dstPath, data, 0644); err != nil { // #nosec G703 -- dstPath is constructed from validated config directory; not user-controlled
 				return err
 			}
 		}

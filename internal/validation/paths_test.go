@@ -178,7 +178,7 @@ func TestSecureJoin(t *testing.T) {
 			}
 
 			if !tt.shouldErr && err == nil && tt.contains != "" {
-				if !strings.Contains(result, tt.contains) {
+				if !strings.Contains(result, filepath.FromSlash(tt.contains)) {
 					t.Errorf("Result %s does not contain expected substring %s", result, tt.contains)
 				}
 			}

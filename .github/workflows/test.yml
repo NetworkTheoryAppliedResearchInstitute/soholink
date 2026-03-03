@@ -2,76 +2,100 @@ name: Test
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  GO_VERSION: '1.21'
+  GO_VERSION: '1.25.7'
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Unit + race tests across all three OS families
+  # GUI packages are excluded here (require CGO + display server).
+  # Full GUI builds are handled by build.yml via GoReleaser.
+  # ─────────────────────────────────────────────────────────────────────────
   test:
+    name: Test / ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v3
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          cache: true
 
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests
-        run: go test -v -race ./...
+      - name: Run unit tests
+        # Exclude internal/gui — it requires CGO + OpenGL on all platforms
+        run: go test -v -race ./internal/...
 
-      - name: Run integration tests
-        run: go test -v -tags=integration ./...
+      - name: Run integration tests (best-effort)
+        run: go test -v -tags=integration ./internal/...
         continue-on-error: true
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # Static analysis
+  # ─────────────────────────────────────────────────────────────────────────
   lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout=5m
 
-  security:
+  # ─────────────────────────────────────────────────────────────────────────
+  # OPA policy tests
+  # ─────────────────────────────────────────────────────────────────────────
+  opa-test:
+    name: OPA policy tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Run Gosec Security Scanner
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: Run OPA policy tests
+        # --v1-compatible: policies use OPA v1 syntax (if/contains keywords)
+        run: opa test --v1-compatible configs/policies/ -v
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Security scanning (Gosec → SARIF → GitHub Security tab)
+  # ─────────────────────────────────────────────────────────────────────────
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Gosec
         uses: securego/gosec@master
         with:
           args: '-no-fail -fmt sarif -out results.sarif ./...'
 
-      - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v2
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif

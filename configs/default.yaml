@@ -16,7 +16,7 @@ storage:
   base_path: ""
 
 policy:
-  directory: ""
+  directory: "configs/policies"
   default_policy: "default.rego"
 
 accounting:
@@ -32,7 +32,7 @@ logging:
 
 # Resource sharing subsystems (Phase 1+)
 resource_sharing:
-  enabled: false
+  enabled: true
   http_api_address: "0.0.0.0:8080"
   portal_address: "0.0.0.0:8081"
 

@@ -114,16 +114,20 @@ func TestDockerClient_InspectContainer(t *testing.T) {
 		t.Fatalf("InspectContainer failed: %v", err)
 	}
 
-	if info.ID != "test-container-id" {
-		t.Errorf("Expected ID 'test-container-id', got '%s'", info.ID)
+	if id, _ := info["Id"].(string); id != "test-container-id" {
+		t.Errorf("Expected ID 'test-container-id', got '%s'", id)
 	}
 
-	if info.State != "running" {
-		t.Errorf("Expected state 'running', got '%s'", info.State)
+	if state, _ := info["State"].(map[string]interface{}); state != nil {
+		if status, _ := state["Status"].(string); status != "running" {
+			t.Errorf("Expected state 'running', got '%s'", status)
+		}
 	}
 
-	if info.IPAddress != "172.17.0.2" {
-		t.Errorf("Expected IP '172.17.0.2', got '%s'", info.IPAddress)
+	if net, _ := info["NetworkSettings"].(map[string]interface{}); net != nil {
+		if ip, _ := net["IPAddress"].(string); ip != "172.17.0.2" {
+			t.Errorf("Expected IP '172.17.0.2', got '%s'", ip)
+		}
 	}
 }
 
@@ -219,7 +223,7 @@ func TestDockerClient_ListContainers(t *testing.T) {
 	client := NewDockerClient(server.URL)
 	ctx := context.Background()
 
-	containers, err := client.ListContainers(ctx, true)
+	containers, err := client.ListContainers(ctx, true, nil)
 	if err != nil {
 		t.Fatalf("ListContainers failed: %v", err)
 	}
@@ -228,8 +232,8 @@ func TestDockerClient_ListContainers(t *testing.T) {
 		t.Errorf("Expected 2 containers, got %d", len(containers))
 	}
 
-	if containers[0].ID != "container1" {
-		t.Errorf("Expected first container ID 'container1', got '%s'", containers[0].ID)
+	if id, _ := containers[0]["Id"].(string); id != "container1" {
+		t.Errorf("Expected first container ID 'container1', got '%s'", id)
 	}
 }
 
@@ -250,7 +254,7 @@ func TestDockerClient_CreateExec(t *testing.T) {
 	client := NewDockerClient(server.URL)
 	ctx := context.Background()
 
-	execID, err := client.CreateExec(ctx, "container-id", []string{"echo", "test"})
+	execID, err := client.CreateExec(ctx, "container-id", map[string]interface{}{"Cmd": []string{"echo", "test"}})
 	if err != nil {
 		t.Fatalf("CreateExec failed: %v", err)
 	}
@@ -273,7 +277,7 @@ func TestDockerClient_RemoveContainer(t *testing.T) {
 	client := NewDockerClient(server.URL)
 	ctx := context.Background()
 
-	err := client.RemoveContainer(ctx, "test-container-id", true, true)
+	err := client.RemoveContainer(ctx, "test-container-id", true)
 	if err != nil {
 		t.Fatalf("RemoveContainer failed: %v", err)
 	}

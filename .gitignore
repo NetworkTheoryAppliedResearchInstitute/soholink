@@ -26,6 +26,9 @@ go.work
 *.db-shm
 *.db-wal
 
+# Runtime accounting logs (rotated daily; not source-controlled)
+/accounting/
+
 # IDE and editor files
 .vscode/
 .idea/

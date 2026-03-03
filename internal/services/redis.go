@@ -102,6 +102,7 @@ func (r *RedisProvisioner) Provision(ctx context.Context, req ProvisionRequest, 
 		Name:        req.Name,
 		Plan:        req.Plan,
 		Status:      StatusRunning,
+		Endpoint:    fmt.Sprintf("localhost:%d", hostPort),
 		Port:        hostPort,
 		Credentials: ServiceCredentials{
 			Password: password,
@@ -159,9 +160,13 @@ func (r *RedisProvisioner) GetMetrics(ctx context.Context, instance *ServiceInst
 	// Calculate CPU percentage
 	cpuDelta := stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage
 	systemDelta := stats.CPUStats.SystemCPUUsage - stats.PreCPUStats.SystemCPUUsage
+	numCPUs := len(stats.CPUStats.CPUUsage.PercpuUsage)
+	if numCPUs == 0 {
+		numCPUs = 1
+	}
 	cpuPercent := 0.0
 	if systemDelta > 0 && cpuDelta > 0 {
-		cpuPercent = (float64(cpuDelta) / float64(systemDelta)) * float64(len(stats.CPUStats.CPUUsage.PercpuUsage)) * 100.0
+		cpuPercent = (float64(cpuDelta) / float64(systemDelta)) * float64(numCPUs) * 100.0
 	}
 
 	// Calculate memory percentage

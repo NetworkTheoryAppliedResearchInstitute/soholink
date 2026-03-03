@@ -17,6 +17,7 @@ type StripeProcessor struct {
 	webhookSecret string
 	client        *http.Client
 	offline       bool
+	baseURL       string // overridable for tests; defaults to https://api.stripe.com
 }
 
 // NewStripeProcessor creates a new Stripe payment processor.
@@ -25,6 +26,7 @@ func NewStripeProcessor(secretKey, webhookSecret string) *StripeProcessor {
 	return &StripeProcessor{
 		secretKey:     secretKey,
 		webhookSecret: webhookSecret,
+		baseURL:       "https://api.stripe.com",
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -144,7 +146,7 @@ func (p *StripeProcessor) CreateCharge(ctx context.Context, req ChargeRequest) (
 	}
 
 	respBody, err := p.doRequest(ctx, http.MethodPost,
-		"https://api.stripe.com/v1/payment_intents",
+		p.baseURL+"/v1/payment_intents",
 		strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
@@ -175,8 +177,8 @@ func (p *StripeProcessor) ConfirmCharge(ctx context.Context, chargeID string) er
 		return fmt.Errorf("stripe: secret key not configured")
 	}
 
-	endpoint := fmt.Sprintf("https://api.stripe.com/v1/payment_intents/%s/confirm",
-		url.PathEscape(chargeID))
+	endpoint := fmt.Sprintf("%s/v1/payment_intents/%s/confirm",
+		p.baseURL, url.PathEscape(chargeID))
 
 	respBody, err := p.doRequest(ctx, http.MethodPost, endpoint, strings.NewReader(""))
 	if err != nil {
@@ -205,7 +207,7 @@ func (p *StripeProcessor) RefundCharge(ctx context.Context, chargeID string, rea
 	form.Set("metadata[reason]", reason)
 
 	respBody, err := p.doRequest(ctx, http.MethodPost,
-		"https://api.stripe.com/v1/refunds",
+		p.baseURL+"/v1/refunds",
 		strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -228,8 +230,8 @@ func (p *StripeProcessor) GetChargeStatus(ctx context.Context, chargeID string) 
 		return nil, fmt.Errorf("stripe: secret key not configured")
 	}
 
-	endpoint := fmt.Sprintf("https://api.stripe.com/v1/payment_intents/%s",
-		url.PathEscape(chargeID))
+	endpoint := fmt.Sprintf("%s/v1/payment_intents/%s",
+		p.baseURL, url.PathEscape(chargeID))
 
 	respBody, err := p.doRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -267,7 +269,7 @@ func (p *StripeProcessor) ListCharges(ctx context.Context, filter ChargeFilter) 
 	}
 	params.Set("limit", fmt.Sprintf("%d", limit))
 
-	endpoint := "https://api.stripe.com/v1/payment_intents?" + params.Encode()
+	endpoint := p.baseURL + "/v1/payment_intents?" + params.Encode()
 
 	respBody, err := p.doRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

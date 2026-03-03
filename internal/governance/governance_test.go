@@ -116,7 +116,7 @@ func TestCreateProposal(t *testing.T) {
 				Title:        "Invalid Pass",
 				Description:  "Testing invalid pass threshold",
 				ProposalType: ProposalTypeParameter,
-				PassPct:      0, // Invalid: < 1
+				PassPct:      -1, // Invalid: < 1
 			},
 			wantErr: true,
 		},
@@ -202,11 +202,8 @@ func TestActivateProposal(t *testing.T) {
 		t.Fatal("Expected non-nil proposal")
 	}
 
-	// Type assertion to access State field
-	if govProposal, ok := retrieved.(*store.GovernanceProposal); ok {
-		if govProposal.State != string(ProposalStateActive) {
-			t.Errorf("State = %s, want %s", govProposal.State, ProposalStateActive)
-		}
+	if retrieved.State != ProposalStateActive {
+		t.Errorf("State = %s, want %s", retrieved.State, ProposalStateActive)
 	}
 }
 

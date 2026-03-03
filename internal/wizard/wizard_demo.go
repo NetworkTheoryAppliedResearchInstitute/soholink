@@ -28,7 +28,7 @@ func DemoWizardFlow() error {
 	if err := caps.ValidateProviderCapability(); err != nil {
 		log.Printf("⚠️  Warning: %v", err)
 		fmt.Println("\nYour system may not be suitable as a provider.")
-		fmt.Println("Continue anyway for demo purposes...\n")
+		fmt.Println("Continue anyway for demo purposes...")
 	}
 
 	// Step 2: Calculate Resources
@@ -138,7 +138,7 @@ func DemoWizardFlow() error {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	fmt.Println("✅ Configuration validated successfully!\n")
+	fmt.Println("✅ Configuration validated successfully!")
 
 	// Step 8: Generate Dependency Report
 	fmt.Println("Step 8: Dependency Report Generated...")

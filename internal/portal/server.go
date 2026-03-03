@@ -63,7 +63,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	log.Printf("[portal] captive portal listening on %s", s.listenAddr)
-	go func() {
+	go func() { // #nosec G118 -- context.Background() intentional: shutdown must complete regardless of parent context cancellation
 		<-ctx.Done()
 		s.server.Shutdown(context.Background())
 	}()

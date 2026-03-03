@@ -34,7 +34,7 @@ func TestGPUManager_ListGPUs(t *testing.T) {
 }
 
 func TestGPUManager_GetGPUInfo(t *testing.T) {
-	manager := &GPUManager{
+	_ = &GPUManager{
 		sysfsPath: t.TempDir(),
 	}
 
@@ -289,7 +289,7 @@ func TestGPUManager_GetIOMMUGroup(t *testing.T) {
 	devicePath := filepath.Join(tmpDir, "bus", "pci", "devices", "0000:01:00.0")
 	os.MkdirAll(devicePath, 0755)
 
-	iommuGroupPath := filepath.Join(devicePath, "iommu_group")
+	_ = filepath.Join(devicePath, "iommu_group")
 	// In real system, this would be a symlink to /sys/kernel/iommu_groups/N
 
 	pciAddr := "0000:01:00.0"
@@ -324,7 +324,7 @@ func TestGPUManager_ListDevicesInIOMMUGroup(t *testing.T) {
 func TestGPUManager_VFIODriverCheck(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	manager := &GPUManager{
+	_ = &GPUManager{
 		sysfsPath: tmpDir,
 	}
 

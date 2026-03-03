@@ -391,6 +391,132 @@ did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK
 
 ---
 
+## Mobile Node Architecture
+
+> **Research basis:** [`docs/research/MOBILE_PARTICIPATION.md`](research/MOBILE_PARTICIPATION.md)
+> **Implementation plan:** [`docs/MOBILE_INTEGRATION.md`](MOBILE_INTEGRATION.md)
+
+Mobile devices participate as a distinct node tier with architecturally different connectivity and lifecycle characteristics from SOHO desktop nodes.
+
+### Node Class Taxonomy
+
+```go
+type NodeClass string
+
+const (
+    NodeClassDesktop       NodeClass = "desktop"       // SOHO PC / server / NAS
+    NodeClassMobileAndroid NodeClass = "mobile-android" // Android phone / tablet
+    NodeClassMobileIOS     NodeClass = "mobile-ios"     // iOS (monitoring only)
+    NodeClassAndroidTV     NodeClass = "android-tv"     // Fire TV / Android TV box
+)
+```
+
+### Participation Tiers
+
+```
+SOHO Desktop / Server
+  ├── Always available
+  ├── Accepts inbound task assignments
+  ├── Any task duration
+  └── Replication factor: 1
+
+Android TV / Fire TV Box
+  ├── Always-on, always-plugged-in
+  ├── No battery / thermal constraints
+  ├── Pulls tasks via WebSocket
+  └── Replication factor: 1
+
+Android Smartphone (plugged in + WiFi)
+  ├── Foreground Service with persistent notification
+  ├── Tasks ≤ 120 seconds (checkpoint between segments)
+  ├── Thermal-aware: pauses at getThermalHeadroom() < 0.2
+  └── Replication factor: 2 (result verified against second node)
+
+iOS Smartphone
+  ├── NO background compute (structural iOS restriction)
+  ├── Monitoring, earnings, job approval only
+  └── Core ML inference (in-foreground only, roadmap)
+```
+
+### Network Topology Difference
+
+Desktop nodes accept **inbound** task assignments; mobile nodes are **outbound-only pull clients** due to CGNAT on cellular networks:
+
+```
+Desktop SOHO model:
+  Coordinator ──push──► Node (inbound TCP accepted)
+
+Mobile model:
+  Node ──WebSocket──► Coordinator (outbound only)
+  Node ──polls──► available task queue
+  Node ──push──► result to coordinator (outbound)
+```
+
+### Mobile Node Constraint Tags
+
+Mobile nodes advertise constraint tags that FedScheduler uses to filter placements:
+
+| Tag | Value | Effect |
+|---|---|---|
+| `mobile` | `true` | Triggers 2× result replication policy |
+| `requires-plugged-in` | `true` | Only assigned tasks when mains power reported |
+| `max-task-duration-seconds` | `120` | Scheduler caps task duration |
+| `arch` | `arm64` | Restricts to ARM-compatible task containers |
+| `wifi-only` | `true` | Node pauses intake on cellular |
+
+### Android Client Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│  SoHoLINK Android App                       │
+│                                             │
+│  BroadcastReceiver                          │
+│  ├── ACTION_POWER_CONNECTED  → start work   │
+│  └── ACTION_POWER_DISCONNECTED → stop work  │
+│                                             │
+│  ConnectivityManager.NetworkCallback        │
+│  └── WiFi lost → pause task intake         │
+│                                             │
+│  ForegroundService ("Earning 0.004 SATS")   │
+│  ├── PowerManager.getThermalHeadroom()      │
+│  │   ├── < 0.5 → reduce concurrency        │
+│  │   └── < 0.2 → pause entirely            │
+│  ├── WebSocket → coordinator (task pull)    │
+│  └── Wasm task executor (ARM64)             │
+│                                             │
+│  WorkManager                                │
+│  └── Scheduled polling when not foreground  │
+│                                             │
+│  Custodial Lightning Wallet                 │
+│  └── Auto-withdraw at configurable threshold│
+└─────────────────────────────────────────────┘
+```
+
+### Result Verification (Mobile Trust Model)
+
+Mobile nodes are subject to optimistic replication before payment releases:
+
+```
+Coordinator assigns task T to:
+  ├── Mobile Node A  (primary)
+  └── Desktop Node B (verification replica)
+
+Both complete → coordinator compares result hashes
+  ├── Match → release Lightning hold invoice (HTLC) to Mobile Node A
+  └── Mismatch → flag Mobile Node A; pay Desktop Node B; investigate
+```
+
+OPA policy (`configs/policies/resource_sharing.rego`):
+
+```rego
+task_replication_factor[node_class] = factor {
+    node_class := input.node.class
+    factor := {"mobile-android": 2, "android-tv": 1, "desktop": 1}[node_class]
+}
+```
+
+---
+
 ## Desktop Client (`fedaaa-gui`)
 
 The SoHoLINK desktop client is a cross-platform Fyne application that members

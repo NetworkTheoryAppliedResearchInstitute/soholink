@@ -122,11 +122,41 @@ type HealthCheckConfig struct {
 }
 
 // WorkloadState tracks runtime state for an active workload.
+//
+// W1 — duplicate field note: WorkloadID, Status, DesiredReplicas, CreatedAt,
+// and UpdatedAt are top-level convenience aliases that mirror the embedded
+// Workload pointer's fields.  When Workload != nil (always the case for
+// actively-scheduled workloads) the authoritative values live on Workload;
+// the top-level fields are a snapshot populated at construction time and may
+// diverge if Workload is mutated after WorkloadState is created.
+// New code should read WorkloadState.Workload.* directly to avoid stale data.
 type WorkloadState struct {
+	// Convenience fields (mirror Workload fields for direct access).
+	// See W1 doc note above — prefer WorkloadState.Workload.* for live values.
+	WorkloadID      string
+	Status          string
+	DesiredReplicas int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+
 	Workload   *Workload
 	Placements []Placement
 	Health     HealthStatus
 	Metrics    WorkloadMetrics
+
+	// Mobile segmentation fields — populated when the workload is split into
+	// short segments for execution on battery-powered mobile nodes.
+	// CheckpointData is the latest serialised execution checkpoint; the
+	// scheduler stores it so that a replacement desktop node can resume from
+	// the last completed segment if the mobile node disappears mid-task.
+	CheckpointData []byte `json:"checkpoint_data,omitempty"`
+
+	// SegmentIndex is the index of the segment currently in-flight (0-based).
+	SegmentIndex int `json:"segment_index,omitempty"`
+
+	// SegmentCount is the total number of segments the task was split into.
+	// 0 means the task has not been segmented (desktop-only execution).
+	SegmentCount int `json:"segment_count,omitempty"`
 }
 
 // Placement records where a single replica is running.

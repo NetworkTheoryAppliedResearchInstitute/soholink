@@ -21,7 +21,7 @@ func writeSecureFile(path string, data []byte) error {
 	if err := setOwnerOnlyACL(path); err != nil {
 		// Log warning but don't fail - file is still written
 		fmt.Fprintf(os.Stderr, "Warning: Could not set strict ACL on %s: %v\n", path, err)
-		fmt.Fprintf(os.Stderr, "File may be accessible to other users. Consider manual ACL configuration with: icacls \"%s\" /inheritance:r /grant:r \"%USERNAME%\":F\n", path)
+		fmt.Fprintf(os.Stderr, "File may be accessible to other users. Consider manual ACL configuration with: icacls \"%s\" /inheritance:r /grant:r \"%%USERNAME%%\":F\n", path)
 		// Return nil to not block functionality, but user is warned
 		return nil
 	}
@@ -41,7 +41,7 @@ func writeSecureFile(path string, data []byte) error {
 func setOwnerOnlyACL(path string) error {
 	// Build icacls command
 	// We need to grant full control to current user and remove all others
-	cmd := exec.Command("icacls", path, "/inheritance:r", "/grant:r", fmt.Sprintf("%s:F", os.Getenv("USERNAME")))
+	cmd := exec.Command("icacls", path, "/inheritance:r", "/grant:r", fmt.Sprintf("%s:F", os.Getenv("USERNAME"))) // #nosec G702 -- path is our keygen file path; icacls args are static flags; USERNAME is Windows system env var
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

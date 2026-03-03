@@ -3,8 +3,8 @@ package blockchain
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"testing"
-	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
@@ -173,7 +173,7 @@ func TestBlockchainMerkleIntegration(t *testing.T) {
 
 		wrongRoot := []byte("wrong-merkle-root-0000000000000")
 
-		valid, err := chain.VerifyBatch(ctx, string(checkpoint.BlockHash), wrongRoot)
+		valid, err := chain.VerifyBatch(ctx, hex.EncodeToString(checkpoint.BlockHash), wrongRoot)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +266,7 @@ func TestMerkleBlockchainProofVerification(t *testing.T) {
 	})
 }
 
-func TestChainIntegrityDetectsT ampering(t *testing.T) {
+func TestChainIntegrityDetectsTampering(t *testing.T) {
 	// Create test store
 	s, err := store.NewMemoryStore()
 	if err != nil {

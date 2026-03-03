@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "SoHoLINK Node (HTTP API)",
+      "runtimeExecutable": "./fedaaa.exe",
+      "runtimeArgs": ["start"],
+      "port": 8080
+    },
+    {
+      "name": "SoHoLINK Captive Portal",
+      "runtimeExecutable": "./fedaaa.exe",
+      "runtimeArgs": ["start"],
+      "port": 8081
+    },
+    {
+      "name": "Globe Interface",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "3000", "--directory", "ui/globe-interface"],
+      "port": 3000
+    },
+    {
+      "name": "Wizard CLI",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/soholink-wizard-cli"],
+      "port": 0
+    }
+  ]
+}

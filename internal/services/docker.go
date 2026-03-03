@@ -64,7 +64,7 @@ func (d *DockerClient) CreateContainer(ctx context.Context, name string, config 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -247,7 +247,7 @@ func (d *DockerClient) CreateExec(ctx context.Context, containerID string, confi
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -346,11 +346,12 @@ func (d *DockerClient) ListContainers(ctx context.Context, all bool, filters map
 
 // buildURL constructs the full API URL.
 func (d *DockerClient) buildURL(path string) string {
+	const apiVersion = "/v1.41"
 	if strings.HasPrefix(d.endpoint, "unix://") {
 		// For Unix sockets, use http://localhost as the host
-		return "http://localhost" + path
+		return "http://localhost" + apiVersion + path
 	}
-	return strings.TrimPrefix(d.endpoint, "tcp://") + path
+	return strings.TrimPrefix(d.endpoint, "tcp://") + apiVersion + path
 }
 
 // extractHostPort extracts the host port from container inspect data.

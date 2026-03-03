@@ -290,7 +290,11 @@ func (f *FirecrackerHypervisor) DestroyVM(vmID string) error {
 	}
 
 	// Clean up TAP device
-	tapDevice := fmt.Sprintf("fc-tap-%s", vmID[:8])
+	suffix := vmID
+	if len(suffix) > 8 {
+		suffix = suffix[:8]
+	}
+	tapDevice := fmt.Sprintf("fc-tap-%s", suffix)
 	f.deleteTAPDevice(tapDevice)
 
 	// Remove VM directory
@@ -388,7 +392,11 @@ func (f *FirecrackerHypervisor) apiPut(vm *FirecrackerVM, path string, body inte
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := vm.httpClient.Do(req)
+	client := vm.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("API request failed: %w", err)
 	}
