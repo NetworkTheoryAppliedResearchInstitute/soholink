@@ -4,8 +4,8 @@
 *.dll
 *.so
 *.dylib
-fedaaa
-fedaaa-*
+/fedaaa
+/fedaaa-*
 
 # Test artifacts
 *.test

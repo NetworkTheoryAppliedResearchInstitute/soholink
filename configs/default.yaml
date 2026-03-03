@@ -16,7 +16,7 @@ storage:
   base_path: ""
 
 policy:
-  directory: "configs/policies"
+  directory: ""
   default_policy: "default.rego"
 
 accounting:

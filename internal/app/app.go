@@ -479,7 +479,7 @@ func (a *App) Start() error {
 	log.Printf("[app]   Auth:       %s", a.Radius.AuthAddr())
 	log.Printf("[app]   Accounting: %s", a.Radius.AcctAddr())
 	log.Printf("[app]   Data dir:   %s", a.Config.Storage.BasePath)
-	log.Printf("[app]   Policies:   %s", a.Config.Policy.Directory)
+	log.Printf("[app]   Policies:   %s", a.PolicyEng.PolicyDir())
 	if a.Config.ResourceSharing.Enabled {
 		log.Printf("[app]   HTTP API:   %s", a.Config.ResourceSharing.HTTPAPIAddress)
 		if a.Config.ResourceSharing.Compute.Enabled {

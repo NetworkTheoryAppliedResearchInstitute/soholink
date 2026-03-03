@@ -3,13 +3,26 @@ package policy
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/open-policy-agent/opa/v1/rego"
 )
+
+// embeddedFS is set at startup via SetEmbeddedFS and used as a fallback when
+// no on-disk policy directory is configured.
+var embeddedFS fs.FS
+
+// SetEmbeddedFS registers an fs.FS (typically an embed.FS sub-tree) that the
+// engine will load .rego files from when policyDir is empty or unset.
+// Call this from main() before NewEngine, mirroring the config.SetDefaultConfig pattern.
+func SetEmbeddedFS(fsys fs.FS) {
+	embeddedFS = fsys
+}
 
 // Engine wraps an embedded OPA instance for policy evaluation.
 type Engine struct {
@@ -36,8 +49,9 @@ type AuthzResult struct {
 	DenyReasons []string `json:"deny_reasons,omitempty"`
 }
 
-// NewEngine creates a new OPA policy engine by loading all .rego files
-// from the given directory.
+// NewEngine creates a new OPA policy engine. If policyDir is non-empty, .rego
+// files are loaded from disk. Otherwise the embedded FS registered via
+// SetEmbeddedFS is used, making the binary fully self-contained.
 func NewEngine(policyDir string) (*Engine, error) {
 	e := &Engine{
 		policyDir: policyDir,
@@ -50,30 +64,56 @@ func NewEngine(policyDir string) (*Engine, error) {
 	return e, nil
 }
 
-// load reads and compiles all .rego files from the policy directory.
+// load reads and compiles all .rego files from the configured source.
+// _test.rego files are always skipped (OPA test helpers, not auth policies).
 func (e *Engine) load() error {
-	// Find all .rego files
-	pattern := filepath.Join(e.policyDir, "*.rego")
-	files, err := filepath.Glob(pattern)
-	if err != nil {
-		return fmt.Errorf("failed to glob policy files: %w", err)
-	}
+	modules := []func(*rego.Rego){rego.Query("data.soholink.authz")}
 
-	if len(files) == 0 {
-		return fmt.Errorf("no policy files found in %s", e.policyDir)
-	}
-
-	// Read policy modules
-	modules := make([]func(*rego.Rego), 0, len(files)+1)
-	modules = append(modules, rego.Query("data.soholink.authz"))
-
-	for _, f := range files {
-		data, err := os.ReadFile(f)
+	if e.policyDir != "" {
+		// ── Disk path ────────────────────────────────────────────────────────
+		pattern := filepath.Join(e.policyDir, "*.rego")
+		files, err := filepath.Glob(pattern)
 		if err != nil {
-			return fmt.Errorf("failed to read policy file %s: %w", f, err)
+			return fmt.Errorf("failed to glob policy files: %w", err)
 		}
-		name := filepath.Base(f)
-		modules = append(modules, rego.Module(name, string(data)))
+
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.rego") {
+				continue // skip OPA test helpers
+			}
+			data, err := os.ReadFile(f)
+			if err != nil {
+				return fmt.Errorf("failed to read policy file %s: %w", f, err)
+			}
+			modules = append(modules, rego.Module(filepath.Base(f), string(data)))
+		}
+
+		if len(modules) == 1 { // only the query was added
+			return fmt.Errorf("no policy files found in %s", e.policyDir)
+		}
+	} else if embeddedFS != nil {
+		// ── Embedded FS path ─────────────────────────────────────────────────
+		files, err := fs.Glob(embeddedFS, "*.rego")
+		if err != nil {
+			return fmt.Errorf("failed to glob embedded policy files: %w", err)
+		}
+
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.rego") {
+				continue // skip OPA test helpers
+			}
+			data, err := fs.ReadFile(embeddedFS, f)
+			if err != nil {
+				return fmt.Errorf("failed to read embedded policy file %s: %w", f, err)
+			}
+			modules = append(modules, rego.Module(filepath.Base(f), string(data)))
+		}
+
+		if len(modules) == 1 {
+			return fmt.Errorf("no policy files found in embedded FS")
+		}
+	} else {
+		return fmt.Errorf("no policy source configured: set policy.directory or call policy.SetEmbeddedFS")
 	}
 
 	// Compile and prepare
@@ -90,7 +130,8 @@ func (e *Engine) load() error {
 	return nil
 }
 
-// Reload re-reads policies from disk. Can be called on SIGHUP or via CLI.
+// Reload re-reads policies from the same source (disk or embedded). Useful on
+// SIGHUP or via a CLI reload command.
 func (e *Engine) Reload() error {
 	return e.load()
 }
@@ -106,26 +147,19 @@ func (e *Engine) Evaluate(ctx context.Context, input *AuthzInput) (*AuthzResult,
 		return nil, fmt.Errorf("policy evaluation failed: %w", err)
 	}
 
-	result := &AuthzResult{
-		Allow: false,
-	}
+	result := &AuthzResult{Allow: false}
 
 	if len(results) == 0 {
 		result.DenyReasons = []string{"no_policy_result"}
 		return result, nil
 	}
 
-	// Extract the result from the evaluation
-	// The query "data.soholink.authz" returns the full authz object
-	if len(results) > 0 && len(results[0].Expressions) > 0 {
+	if len(results[0].Expressions) > 0 {
 		expr := results[0].Expressions[0].Value
 		if resultMap, ok := expr.(map[string]interface{}); ok {
-			// Check "allow" field
 			if allow, ok := resultMap["allow"].(bool); ok {
 				result.Allow = allow
 			}
-
-			// Check "deny_reasons" field
 			if reasons, ok := resultMap["deny_reasons"]; ok {
 				if reasonSet, ok := reasons.([]interface{}); ok {
 					for _, r := range reasonSet {
@@ -141,13 +175,23 @@ func (e *Engine) Evaluate(ctx context.Context, input *AuthzInput) (*AuthzResult,
 	return result, nil
 }
 
-// PolicyFiles returns the list of .rego files in the policy directory.
+// PolicyFiles returns the list of .rego files currently in use.
 func (e *Engine) PolicyFiles() ([]string, error) {
-	pattern := filepath.Join(e.policyDir, "*.rego")
-	return filepath.Glob(pattern)
+	if e.policyDir != "" {
+		pattern := filepath.Join(e.policyDir, "*.rego")
+		return filepath.Glob(pattern)
+	}
+	if embeddedFS != nil {
+		return fs.Glob(embeddedFS, "*.rego")
+	}
+	return nil, nil
 }
 
-// PolicyDir returns the policy directory path.
+// PolicyDir returns the on-disk policy directory path, or "(embedded)" if the
+// binary is running from its embedded policy set.
 func (e *Engine) PolicyDir() string {
-	return e.policyDir
+	if e.policyDir != "" {
+		return e.policyDir
+	}
+	return "(embedded)"
 }
