@@ -1,8 +1,8 @@
 # SoHoLINK Software Development Life Cycle
 
-**Version:** 1.0 — 2026-03-03
+**Version:** 1.1 — 2026-03-04
 **Module:** `github.com/NetworkTheoryAppliedResearchInstitute/soholink`
-**Language:** Go 1.24.6
+**Language:** Go 1.25.7
 
 This document defines the end-to-end Software Development Life Cycle (SDLC) for SoHoLINK.  It covers every stage from idea to production and includes SoHoLINK-specific requirements for payment safety, multi-platform delivery, policy governance, and ML telemetry integrity.
 
@@ -75,6 +75,7 @@ Bullet list of observable, testable outcomes.
 Features are assigned to a milestone from ROADMAP.md:
 
 ```
+v0.1.x — Local web dashboard (in progress — Phase 1 shipped 2026-03-04)
 v0.2.0 — Android TV nodes
 v0.3.0 — Android "Earn While Charging"
 v0.4.0 — iOS management client
@@ -423,7 +424,7 @@ Every PR must:
 | `configs/policies/*.rego` | 1 reviewer familiar with OPA | Policy change can silently allow or deny operations |
 | `internal/orchestration/` | 1 reviewer | Scheduler bugs affect all nodes |
 | `internal/ml/` | 1 reviewer | Feature vector changes break telemetry compatibility |
-| `internal/httpapi/` | 1 reviewer | Public API surface; rate limiting and validation must be verified |
+| `internal/httpapi/` | 1 reviewer | Public API surface; rate limiting and validation must be verified; dashboard FS wiring |
 | `internal/notification/apns.go` | 1 reviewer | APNs auth failures silently drop push notifications |
 | All other packages | 1 reviewer | Standard |
 
@@ -590,12 +591,14 @@ Before publishing a release, manually verify on each platform:
 
 | Test | Windows | Linux | macOS |
 |------|---------|-------|-------|
-| CLI `soholink --version` prints correct version | ✅ | ✅ | ✅ |
-| GUI launches setup wizard on first run | ✅ | ✅ | ✅ |
-| Dashboard loads all 8 tabs without error | ✅ | ✅ | ✅ |
-| Hardware detection returns non-zero CPU/RAM | ✅ | ✅ | ✅ |
+| CLI `fedaaa --version` prints correct version | ✅ | ✅ | ✅ |
+| `fedaaa start` → `GET /api/health` returns `{"status":"ok"}` | ✅ | ✅ | ✅ |
+| `GET /` redirects to `/dashboard` | ✅ | ✅ | ✅ |
+| Dashboard loads all 5 screens without JS error | ✅ | ✅ | ✅ |
+| `GET /api/status` returns valid JSON with `uptime_seconds` > 0 | ✅ | ✅ | ✅ |
+| Hardware detection returns non-zero CPU/RAM (wizard) | ✅ | ✅ | ✅ |
 | OPA policy evaluation returns expected decisions | ✅ | ✅ | ✅ |
-| NSIS installer installs and uninstalls cleanly | ✅ | — | — |
+| `scripts\install-service.ps1` installs and `uninstall-service.ps1` removes | ✅ | — | — |
 | AppImage runs on Ubuntu without install | — | ✅ | — |
 | `.pkg` installs cleanly | — | — | ✅ |
 
@@ -693,10 +696,22 @@ Post-incident reviews are stored in `docs/incidents/YYYY-MM-DD-short-title.md`.
 
 ### 10.8 Multi-Platform Build (`cmd/`, build tags)
 
+- **Headless entry point:** `cmd/fedaaa/main.go` — single self-contained binary; no external `configs/` or `ui/` directory required at runtime
 - **GUI entry point:** `cmd/soholink/main.go` with `//go:build gui` — no args → GUI; with args → `cli.Execute()`
 - **CGO discipline:** CGO is only enabled for GUI builds; all non-GUI packages must compile with `CGO_ENABLED=0`
 - **Static linking (Windows):** Production Windows GUI uses `-extldflags "-static-libgcc -static-libstdc++ -static-libpthread"` to produce a zero-DLL-dependency binary
 - **LDFLAGS injection:** `main.version`, `main.commit`, `main.buildTime` must be populated on all release builds
+- **Embedded assets:** `embed.go` holds `//go:embed` directives for `configs/policies`, `ui/dashboard`; `cmd/fedaaa/main.go` must call `policy.SetEmbeddedFS()` and `cli.SetDashboardFS()` before `cli.Execute()`
+
+### 10.9 Local Web Dashboard (`ui/dashboard/`, `internal/httpapi/dashboard.go`)
+
+- **Technology:** Embedded HTML/CSS/JS served from `fedaaa.exe` at `http://localhost:8080/dashboard` — not a Fyne native app and not a cloud SaaS
+- **5 screens:** Dashboard (radial dials), Plan Work, Management (income/payments), Help, Settings
+- **Asset embedding:** `//go:embed ui/dashboard` in `embed.go`; `fs.Sub(soholink.DashboardFS, "ui/dashboard")` strips prefix before passing to server; use `http.ServeFileFS` (Go 1.22+) for Range, ETag, and caching
+- **No CDN dependencies:** All JS/CSS must be embedded in the binary — no external network requests at runtime
+- **Hash-router:** Unknown paths under `/dashboard/` fall through to `index.html`; the JS hash-router (`location.hash`) handles tab selection client-side
+- **API contract:** `/api/status` returns node stats as JSON; zero-values are valid when sub-systems are unavailable — the frontend must handle zeros gracefully
+- **PowerShell scripts:** Always use ASCII hyphens (`-`) in `.ps1` files; UTF-8 em dash (`—`) becomes CP1252 byte `0x94` in PS5.1, which terminates string literals prematurely
 
 ---
 
@@ -810,4 +825,4 @@ PR opened / push to main or develop
 
 *This document should be reviewed and updated at the start of each milestone cycle.*
 *Owner: SoHoLINK maintainers*
-*Last updated: 2026-03-03*
+*Last updated: 2026-03-04*
