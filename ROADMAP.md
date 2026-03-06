@@ -12,6 +12,29 @@ For detailed implementation plans see:
 
 ---
 
+## ✅ v0.1.x — Buyer-Side Marketplace & Prepaid Wallet (Shipped 2026-03-05)
+
+**Goal:** Complete the requester (buyer) side of the marketplace so the platform is a true
+two-sided marketplace: providers list compute → requesters browse, estimate, pay, and launch.
+
+**All items shipped:**
+
+- ✅ Schema migration v3: `wallet_balances`, `wallet_topups`, `orders` tables (auto-applied on startup)
+- ✅ `internal/store/marketplace.go` — `WalletBalanceRow`, `WalletTopupRow`, `OrderRow` structs; CRUD helpers for wallet and orders
+- ✅ `internal/payment/ledger.go` — `GetWalletBalance`, `TopupWallet`, `ConfirmTopup`, `DebitWallet` (atomic, `ErrInsufficientBalance`)
+- ✅ `internal/orchestration/scheduler.go` — `FindNodes(ctx, NodeQuery)` delegates to `NodeDiscovery`
+- ✅ `internal/httpapi/wallet.go` — 4 wallet endpoints: balance, topup, topup history, confirm-topup
+- ✅ `internal/httpapi/marketplace.go` — 8 marketplace endpoints: browse nodes, estimate, list services, purchase workload, purchase service, list orders, get order, cancel order
+- ✅ `internal/httpapi/server.go` — `catalog *services.Catalog` field + `SetServiceCatalog` setter; 11 new routes registered
+- ✅ `internal/app/app.go` — `HTTPAPIServer.SetServiceCatalog(a.ServiceCatalog)` wired in `initManagedServices`
+- ✅ `mobile/flutter-app/lib/models/marketplace.dart` — `MarketplaceNode`, `CostEstimate`, `WalletBalance`, `Order` models
+- ✅ `mobile/flutter-app/lib/api/soholink_client.dart` — 8 new API methods + `_post` helper
+- ✅ `mobile/flutter-app/lib/pages/marketplace_page.dart` — browse + filter provider nodes
+- ✅ `mobile/flutter-app/lib/pages/order_page.dart` — configure workload, live estimate, wallet balance, pay & launch
+- ✅ `mobile/flutter-app/lib/pages/home_page.dart` — 6th "Market" tab with `storefront_outlined` icon
+
+---
+
 ## 🔨 v0.1.x — Local Web Dashboard (In Progress, 2026-03-03)
 
 **Goal:** Replace the Fyne native GUI with an embedded local web dashboard served by `fedaaa.exe` at
@@ -224,18 +247,38 @@ The foundational federated compute marketplace. All core subsystems operational.
 
 ---
 
-## 🗓 v0.8.0 — P2P Mesh Networking
+## 🔨 v0.8.0 — P2P Mesh Networking
 
-**Goal:** Nodes discover each other via mDNS, form a mesh when the coordinator is offline, and sync back when it returns.
+**Goal:** Nodes discover each other automatically, form a resilient mesh when the coordinator is
+offline, and sync back when it returns.  Topology follows the Watts–Strogatz small-world model:
+dense LAN clusters (high clustering coefficient) connected by sparse cross-subnet links (short path
+length) via the HTTP registration API.
 
-**Target:** Q4 2026 (4–5 weeks)
+**Target:** Q4 2026 (phased delivery)
 
-- [ ] `internal/p2p/`: mDNS discovery via `_soholink._tcp` service advertisement
-- [ ] Ed25519 peer authentication handshake
-- [ ] Gossip protocol for peer capability exchange
+**Phase 1 — LAN Peer Discovery (shipped 2026-03-04):**
+
+- ✅ `internal/p2p/mesh.go` — signed multicast UDP on `239.255.42.99:7946` (RFC 2365
+  administratively-scoped; will not leave the LAN); `Announcement` (Ed25519 signed, 30 s anti-replay
+  window); 10 s announce, 45 s TTL, 15 s stale reaper; auto-upserts into `federation_nodes`
+- ✅ `internal/p2p/peers_handler.go` — `GET /api/peers` HTTP handler
+- ✅ `internal/httpapi/server.go` — `SetP2PMesh()` + `/api/peers` route (graceful degradation when
+  mesh is not configured)
+- ✅ `internal/app/app.go` — `P2PMesh` field, key-loading in `initP2P()`, mesh goroutine in `Start()`
+- ✅ `internal/config/config.go` — `StorageConfig.IPFSAPIAddr` for Kubo API address advertisement
+
+**Phase 2 — Cross-Subnet Registration & Gossip (Q4 2026, 3–4 weeks):**
+
+- [ ] `POST /api/peers/register` — HTTP endpoint to manually register WAN peers (provides the sparse
+  long-range edges that give the federation its small-world path-length properties)
+- [ ] Gossip protocol for peer capability exchange across subnets
+- [ ] Peer capability propagation: each node relays a bounded subset of known peers to newcomers
+
+**Phase 3 — Offline Mesh & Coordinator Sync (Q4 2026, 3–4 weeks):**
+
 - [ ] Mesh block voting protocol (collect signed votes with timeout)
-- [ ] Central sync: `writeBlockToCentral()` with exponential backoff
-- [ ] Anti-eclipse protection (minimum peer diversity)
+- [ ] Central sync: `writeBlockToCentral()` with exponential backoff when coordinator returns
+- [ ] Anti-eclipse protection (minimum peer diversity requirement)
 - [ ] P2P integration tests: two-node mesh, central-offline continuity, sync-on-return
 
 ---
@@ -273,6 +316,13 @@ The foundational federated compute marketplace. All core subsystems operational.
 
 **Target:** Q1 2027 (6–8 weeks)
 
+**Already wired (2026-03-05):**
+- ✅ `internal/services/catalog.go` — `ServiceCatalog` with `GetPlans`, `Provision` — initialized in `app.go`
+- ✅ `internal/httpapi/server.go` — `catalog` field + `SetServiceCatalog` setter wired from `initManagedServices`
+- ✅ `GET /api/marketplace/services` — lists plans from the wired catalog
+- ✅ `POST /api/marketplace/purchase-service` — debit wallet + `catalog.Provision()` + order record
+
+**Remaining (Docker provisioners):**
 - [ ] `internal/services/postgres.go`: Docker pull + start, streaming replication for HA, `pg_isready` health
 - [ ] `internal/services/objectstore.go`: MinIO container, bucket + service account creation
 - [ ] `internal/services/queue.go`: RabbitMQ container, vhost + user provisioning
@@ -318,11 +368,11 @@ v0.1.0 (shipped 2026-03-01)
     │
     ├──► v0.6.0  ML-Driven Scheduling       (Phase 0+1 ✅ shipped 2026-03-02; Phase 2-4 pending)
     │
-    ├──► v0.8.0  P2P mesh                   (independent)
+    ├──► v0.8.0  P2P mesh                   (Phase 1 ✅ LAN discovery shipped 2026-03-04; Phase 2-3 pending)
     │
     ├──► v0.10.0 Hypervisor backends        (requires v0.5 sandbox)
     │
-    └──► v0.11.0 Managed services           (requires v0.10 or at least v0.5)
+    └──► v0.11.0 Managed services           (catalog + HTTP API ✅ wired 2026-03-05; Docker provisioners pending)
 ```
 
 ---
@@ -341,7 +391,7 @@ Items explicitly deferred or out of scope:
 
 ---
 
-*Last updated: 2026-03-03 (Web dashboard Phase 1 in progress; ML Phases 0+1 shipped; code review hardening patch applied — see CHANGELOG.md [Unreleased])*
+*Last updated: 2026-03-05 (Buyer-side marketplace + prepaid wallet shipped; P2P LAN mesh Phase 1 shipped; web dashboard Phase 1 in progress; ML Phases 0+1 shipped — see CHANGELOG.md [Unreleased])*
 *Detailed mobile plan: [`docs/MOBILE_INTEGRATION.md`](docs/MOBILE_INTEGRATION.md)*
 *ML scheduling research: [`docs/research/ML_LOAD_BALANCING.md`](docs/research/ML_LOAD_BALANCING.md)*
 *Full change history: [`CHANGELOG.md`](CHANGELOG.md)*

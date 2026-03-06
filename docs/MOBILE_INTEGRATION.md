@@ -1,7 +1,7 @@
 # Mobile Integration Plan
 
 **Project:** SoHoLINK — Federated SOHO Compute Marketplace
-**Date:** 2026-03-02
+**Date:** 2026-03-02 (updated 2026-03-05: Flutter marketplace pages added)
 **Research basis:** [`docs/research/MOBILE_PARTICIPATION.md`](research/MOBILE_PARTICIPATION.md)
 
 This document is the actionable engineering plan derived from the mobile participation research. It is organized into four sequential phases, each independently deployable and useful, with later phases building on earlier ones.
@@ -476,6 +476,97 @@ func (h *MobileHub) Unregister(nodeID string)
 func (h *MobileHub) PushTask(nodeID string, task *orchestration.Workload) error
 func (h *MobileHub) Broadcast(msg interface{}) // for network announcements
 ```
+
+---
+
+## Flutter Cross-Platform App — Monitoring + Marketplace (Shipped)
+
+**File:** `mobile/flutter-app/`
+**Status:** ✅ 9 pages implemented and connected to the live REST API.
+**Technology:** Flutter (Dart); targets web, Android, and iOS in a single codebase.
+
+Unlike the native Android and iOS applications planned in Phases 1–4 (which focus on
+**provider-side compute participation**), the Flutter app covers two distinct roles:
+
+1. **Provider monitoring** — check earnings, peers, workloads from any device on the network.
+2. **Requester marketplace** — browse compute nodes, estimate costs, top up a wallet, launch and track workloads. *(Added 2026-03-05)*
+
+### Pages
+
+| Page | Added | Role | Key API calls |
+|------|-------|------|--------------|
+| Login | Initial | Auth via Ed25519 challenge/response | `GET /api/auth/challenge`, `POST /api/auth/connect` |
+| Dashboard | Initial | Node health, BTC/USD rate, live metrics | `GET /api/status` |
+| Peers | Initial | Federation peer list with status | `GET /api/peers` |
+| Revenue | Initial | Earnings history with USD conversion | `GET /api/revenue` |
+| Workloads | Initial | Active rental workloads with status | `GET /api/workloads` |
+| **Marketplace** | **2026-03-05** | Browse + filter provider nodes; select for order | `GET /api/marketplace/nodes` |
+| **Order** | **2026-03-05** | Configure workload, estimate cost, top up wallet, pay & launch | `POST /api/marketplace/estimate`, `GET /api/wallet/balance`, `POST /api/wallet/topup`, `POST /api/marketplace/purchase` |
+| Settings | Initial | Node URL configuration | — |
+| About | Initial | App version, project links | — |
+
+### Marketplace Page (`lib/pages/marketplace_page.dart`)
+
+```
+MarketplacePage
+├── _FilterBar
+│   ├── Min CPU slider (0–16 cores)
+│   ├── Region dropdown (any, us-east-1, us-west-2, eu-west-1, ap-southeast-1)
+│   └── GPU toggle switch
+├── Provider ListView → _ProviderCard per node
+│   ├── Status dot (green=online, red=offline)
+│   ├── Short DID label (truncated with ellipsis)
+│   ├── Region badge (purple pill)
+│   ├── Resource chips: vCPU / RAM / Disk / GPU model
+│   ├── Price: N sats/CPU/hr
+│   ├── _ReputationBar (60px linear progress, green/amber/red)
+│   └── "Configure" → Navigator.push(OrderPage(node: node))
+└── _EmptyState / _ErrorState with retry
+```
+
+### Order Page (`lib/pages/order_page.dart`)
+
+```
+OrderPage(node: MarketplaceNode)
+├── Provider summary card (selected node info)
+├── Resource configurator
+│   ├── CPU slider (0.5 → node.availableCpu, step 0.5)
+│   ├── RAM slider (512 MB → node.availableMemoryMb, step 512)
+│   ├── Disk slider (1 GB → node.availableDiskGb, step 1)
+│   └── Duration chips: 1h | 4h | 8h | 24h | 72h
+├── Cost estimate card (live — refetches on slider release)
+│   ├── CPU cost / Memory cost / Disk cost / Platform fee
+│   └── Total: N sats (≈ $X.XX USD)
+├── Wallet balance card
+│   ├── Balance in sats + USD (green if sufficient, red if not)
+│   └── "Add Funds" → top-up dialog (Lightning invoice)
+│       └── Dev-confirm button (POST /api/wallet/confirm-topup)
+└── "Pay & Launch Workload" button (enabled when balance ≥ total)
+    └── POST /api/marketplace/purchase → order confirmation dialog
+        └── Shows order_id and charged_sats
+```
+
+### New Dart Models (`lib/models/marketplace.dart`)
+
+| Class | Fields |
+|-------|--------|
+| `MarketplaceNode` | `nodeDid`, `address`, `region`, `availableCpu`, `availableMemoryMb`, `availableDiskGb`, `hasGpu`, `gpuModel`, `pricePerCpuHourSats`, `reputationScore`, `uptimePct`, `status`; `.shortDid` getter |
+| `CostEstimate` | `cpuCostSats`, `memoryCostSats`, `diskCostSats`, `platformFeeSats`, `totalSats`, `totalUsd`, `btcUsdRate`, `durationHours`; `CostEstimate.zero` constant |
+| `WalletBalance` | `balanceSats`, `balanceBtc`, `balanceUsd`, `btcUsdRate`; `WalletBalance.zero` constant |
+| `Order` | `orderId`, `orderType`, `resourceRefId`, `description`, `cpuCores`, `memoryMb`, `diskGb`, `durationHours`, `estimatedSats`, `chargedSats`, `status`, `createdAt`, `updatedAt` |
+
+### New API Methods (`lib/api/soholink_client.dart`)
+
+| Method | HTTP call |
+|--------|-----------|
+| `getMarketplaceNodes({minCpu, maxPriceSats, region, gpu})` | `GET /api/marketplace/nodes` |
+| `estimateCost({cpuCores, memoryMb, diskGb, durationHours})` | `POST /api/marketplace/estimate` |
+| `purchaseWorkload({cpuCores, memoryMb, diskGb, durationHours, ...})` | `POST /api/marketplace/purchase` |
+| `getWalletBalance()` | `GET /api/wallet/balance` |
+| `topupWallet({amountSats, processor})` | `POST /api/wallet/topup` |
+| `confirmTopup(topupId)` | `POST /api/wallet/confirm-topup` |
+| `getOrders({limit})` | `GET /api/orders` |
+| `cancelOrder(orderId)` | `POST /api/orders/{id}/cancel` |
 
 ---
 

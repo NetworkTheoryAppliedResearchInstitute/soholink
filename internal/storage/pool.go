@@ -11,15 +11,17 @@ import (
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/accounting"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/moderation"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
 // Pool manages shared storage for the federation.
 type Pool struct {
-	store      *store.Store
-	accounting *accounting.Collector
-	scanner    *ContentScanner
-	baseDir    string
+	store       *store.Store
+	accounting  *accounting.Collector
+	scanner     *ContentScanner
+	hashChecker *moderation.CSAMHashChecker // optional — nil skips hash check
+	baseDir     string
 	maxFileSize int64
 }
 
@@ -32,6 +34,13 @@ func NewPool(s *store.Store, ac *accounting.Collector, scanner *ContentScanner, 
 		baseDir:     baseDir,
 		maxFileSize: maxFileSize,
 	}
+}
+
+// SetHashChecker attaches a CSAM hash checker. When set, every upload's SHA-256
+// is checked against the platform content blocklist before writing to disk.
+// Files matching a blocked hash are rejected with HTTP 451.
+func (p *Pool) SetHashChecker(hc *moderation.CSAMHashChecker) {
+	p.hashChecker = hc
 }
 
 // StoredFile represents a file in the shared storage pool.
@@ -74,6 +83,27 @@ func (p *Pool) Upload(ctx context.Context, ownerDID string, fileName string, mim
 		return nil, fmt.Errorf("file exceeds maximum size of %d bytes", p.maxFileSize)
 	}
 
+	// CSAM / illegal content hash check (Item 1 — safety)
+	// Must run before ClamAV so an exact hash match triggers 451 immediately.
+	var contentHash [32]byte
+	copy(contentHash[:], hasher.Sum(nil))
+	hashStr := fmt.Sprintf("%x", contentHash)
+
+	if p.hashChecker != nil {
+		if blocked, reason, checkErr := p.hashChecker.Check(ctx, hashStr); checkErr == nil && blocked {
+			os.Remove(tmpPath)
+			log.Printf("[storage] CSAM/illegal content BLOCKED: file=%s owner=%s reason=%s hash=%s",
+				fileName, ownerDID, reason, hashStr[:16]+"...")
+			p.accounting.Record(&accounting.AccountingEvent{
+				Timestamp: time.Now(),
+				EventType: "storage_illegal_content_blocked",
+				UserDID:   ownerDID,
+				Reason:    reason,
+			})
+			return nil, moderation.ErrContentBlocked
+		}
+	}
+
 	// Content scanning
 	if p.scanner != nil {
 		result, err := p.scanner.Scan(ctx, tmpPath)
@@ -94,11 +124,7 @@ func (p *Pool) Upload(ctx context.Context, ownerDID string, fileName string, mim
 		}
 	}
 
-	// Move to permanent location
-	var contentHash [32]byte
-	copy(contentHash[:], hasher.Sum(nil))
-	hashStr := fmt.Sprintf("%x", contentHash)
-
+	// Move to permanent location — contentHash/hashStr already computed above.
 	permDir := filepath.Join(p.baseDir, "files", hashStr[:2])
 	if err := os.MkdirAll(permDir, 0750); err != nil {
 		os.Remove(tmpPath)

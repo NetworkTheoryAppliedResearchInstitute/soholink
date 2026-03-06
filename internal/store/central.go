@@ -869,6 +869,42 @@ type AlertRow struct {
 	CreatedAt     time.Time
 }
 
+// ---------------------------------------------------------------------------
+// Daily revenue aggregation (for mobile app charts)
+// ---------------------------------------------------------------------------
+
+// DailyRevenueRow is a per-day revenue aggregate used by the mobile dashboard.
+type DailyRevenueRow struct {
+	Date string // "YYYY-MM-DD"
+	Sats int64
+}
+
+// GetDailyRevenueLast30Days returns per-day revenue totals for the past 30 days,
+// ordered oldest-first. Days with no revenue are omitted.
+func (s *Store) GetDailyRevenueLast30Days(ctx context.Context) ([]DailyRevenueRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT strftime('%Y-%m-%d', created_at) AS day,
+		        COALESCE(SUM(total_amount), 0)   AS sats
+		 FROM   central_revenue
+		 WHERE  created_at >= datetime('now', '-30 days')
+		 GROUP  BY day
+		 ORDER  BY day ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []DailyRevenueRow
+	for rows.Next() {
+		var r DailyRevenueRow
+		if err := rows.Scan(&r.Date, &r.Sats); err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
 // GetRecentAlerts returns the most recent rating alerts.
 func (s *Store) GetRecentAlerts(ctx context.Context, limit int) ([]AlertRow, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -889,4 +925,83 @@ func (s *Store) GetRecentAlerts(ctx context.Context, limit int) ([]AlertRow, err
 		result = append(result, a)
 	}
 	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Payout operations (Gap 2 — real payout records backed by the payouts table)
+// ---------------------------------------------------------------------------
+
+// PayoutRow represents a payout request in the payouts table.
+type PayoutRow struct {
+	PayoutID    string
+	ProviderDID string
+	AmountSats  int64
+	Processor   string     // "lightning", "stripe", "barter", etc.
+	Status      string     // "pending", "processing", "settled", "failed"
+	ExternalID  string     // processor-side transaction/payment ID
+	ErrorMsg    string
+	RequestedAt time.Time
+	SettledAt   *time.Time
+}
+
+// CreatePayout inserts a new payout record. The caller must set PayoutID.
+func (s *Store) CreatePayout(ctx context.Context, p *PayoutRow) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO payouts
+			(payout_id, provider_did, amount_sats, processor, status, external_id, error_msg, requested_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.PayoutID, p.ProviderDID, p.AmountSats, p.Processor,
+		p.Status, p.ExternalID, p.ErrorMsg, p.RequestedAt)
+	return err
+}
+
+// UpdatePayoutStatus advances the status of a payout and optionally records
+// the processor-side ID and any error message.
+func (s *Store) UpdatePayoutStatus(ctx context.Context, payoutID, status, externalID, errMsg string) error {
+	var settledAt interface{}
+	if status == "settled" {
+		settledAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE payouts
+		   SET status=?, external_id=?, error_msg=?, settled_at=?
+		 WHERE payout_id=?`,
+		status, externalID, errMsg, settledAt, payoutID)
+	return err
+}
+
+// ListPayouts returns recent payout records for a provider, newest first.
+// Pass limit ≤ 0 for a default of 50.
+func (s *Store) ListPayouts(ctx context.Context, providerDID string, limit int) ([]PayoutRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT payout_id, provider_did, amount_sats, processor,
+		       status, external_id, error_msg, requested_at, settled_at
+		  FROM payouts
+		 WHERE provider_did = ?
+		 ORDER BY requested_at DESC LIMIT ?`, providerDID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []PayoutRow
+	for rows.Next() {
+		var p PayoutRow
+		var settledAt sql.NullTime
+		if err := rows.Scan(
+			&p.PayoutID, &p.ProviderDID, &p.AmountSats, &p.Processor,
+			&p.Status, &p.ExternalID, &p.ErrorMsg, &p.RequestedAt, &settledAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan payout row: %w", err)
+		}
+		if settledAt.Valid {
+			t := settledAt.Time
+			p.SettledAt = &t
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
 }

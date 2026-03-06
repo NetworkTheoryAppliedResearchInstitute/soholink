@@ -29,13 +29,5 @@ func main() {
 	}
 	policy.SetEmbeddedFS(policySub)
 
-	// Register embedded dashboard assets so /dashboard is served from the binary.
-	// fs.Sub strips the "ui/dashboard" prefix; the handler sees index.html directly.
-	dashSub, err := fs.Sub(soholink.DashboardFS, "ui/dashboard")
-	if err != nil {
-		log.Fatalf("failed to sub embedded dashboard FS: %v", err)
-	}
-	cli.SetDashboardFS(dashSub)
-
 	cli.Execute(version, commit, buildTime)
 }

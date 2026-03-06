@@ -3,9 +3,10 @@ node:
   location: ""
 
 radius:
+  enabled: false
   auth_address: "0.0.0.0:1812"
   acct_address: "0.0.0.0:1813"
-  shared_secret: "testing123"
+  shared_secret: ""   # REQUIRED when enabled: true — set via SOHOLINK_RADIUS_SHARED_SECRET
 
 auth:
   credential_ttl: 3600
@@ -35,6 +36,14 @@ resource_sharing:
   enabled: true
   http_api_address: "0.0.0.0:8080"
   portal_address: "0.0.0.0:8081"
+
+  # TLS: set both fields to enable HTTPS.  Leave empty for HTTP (dev/LAN only).
+  tls_cert_file: ""   # e.g. /etc/soholink/tls/cert.pem
+  tls_key_file:  ""   # e.g. /etc/soholink/tls/key.pem
+
+  # CORS allowed origins.  Restrict to your app domain before public launch.
+  allowed_origins:
+    - "*"
 
   compute:
     enabled: false
@@ -70,6 +79,9 @@ payment:
       federation_only: true
   offline_settlement_interval: "5m"
   max_offline_queue: 1000
+  # Stripe webhook signing secret (from Stripe Dashboard → Webhooks).
+  # Set via env SOHOLINK_PAYMENT_STRIPE_WEBHOOK_SECRET.
+  stripe_webhook_secret: ""
 
 lbtas:
   enabled: false

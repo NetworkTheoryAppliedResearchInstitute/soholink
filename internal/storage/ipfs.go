@@ -13,15 +13,20 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/moderation"
 )
 
 // IPFSClient talks to a Kubo IPFS daemon over its HTTP RPC API.
@@ -177,6 +182,7 @@ func (c *IPFSClient) IsOnline(ctx context.Context) bool {
 type IPFSStoragePool struct {
 	client      *IPFSClient
 	maxFileSize int64
+	hashChecker *moderation.CSAMHashChecker // optional — nil skips hash check
 	mu          sync.RWMutex
 	index       map[string]*IPFSFile // key: fileID (cid[:16]); guarded by mu
 }
@@ -202,12 +208,45 @@ func NewIPFSStoragePool(client *IPFSClient, maxFileSize int64) *IPFSStoragePool 
 	}
 }
 
-// Upload stores a file in IPFS and returns the metadata.
-func (p *IPFSStoragePool) Upload(ctx context.Context, ownerDID, fileName, mimeType string, r io.Reader) (*IPFSFile, error) {
-	// Enforce size limit using a limited reader
-	limited := io.LimitReader(r, p.maxFileSize+1)
+// SetHashChecker attaches a CSAM hash checker to the IPFS pool.
+// When set, every upload's SHA-256 is verified against the platform content
+// blocklist before the bytes are sent to the IPFS daemon.
+func (p *IPFSStoragePool) SetHashChecker(hc *moderation.CSAMHashChecker) {
+	p.mu.Lock()
+	p.hashChecker = hc
+	p.mu.Unlock()
+}
 
-	cid, err := p.client.Add(ctx, fileName, limited)
+// Upload stores a file in IPFS and returns the metadata.
+// Content safety checks run before the file reaches the IPFS daemon:
+//  1. SHA-256 of the raw bytes is checked against the CSAM / illegal-content blocklist.
+//  2. Any match returns moderation.ErrContentBlocked (HTTP 451).
+func (p *IPFSStoragePool) Upload(ctx context.Context, ownerDID, fileName, mimeType string, r io.Reader) (*IPFSFile, error) {
+	// Buffer the entire upload so we can compute SHA-256 before sending to IPFS.
+	limited := io.LimitReader(r, p.maxFileSize+1)
+	buf, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("ipfs upload: read: %w", err)
+	}
+	if int64(len(buf)) > p.maxFileSize {
+		return nil, fmt.Errorf("ipfs upload: file exceeds maximum size of %d bytes", p.maxFileSize)
+	}
+
+	// CSAM / illegal-content hash check (Item 1 — safety).
+	p.mu.RLock()
+	hc := p.hashChecker
+	p.mu.RUnlock()
+	if hc != nil {
+		h := sha256.Sum256(buf)
+		sha256hex := hex.EncodeToString(h[:])
+		if blocked, reason, checkErr := hc.Check(ctx, sha256hex); checkErr == nil && blocked {
+			log.Printf("[ipfs] CSAM/illegal content BLOCKED: file=%s owner=%s reason=%s hash=%s",
+				fileName, ownerDID, reason, sha256hex[:16]+"...")
+			return nil, moderation.ErrContentBlocked
+		}
+	}
+
+	cid, err := p.client.Add(ctx, fileName, bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("ipfs upload: %w", err)
 	}

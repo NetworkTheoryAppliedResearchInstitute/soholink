@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -22,13 +25,29 @@ type LightningProcessor struct {
 }
 
 // NewLightningProcessor creates a new Bitcoin Lightning payment processor.
-func NewLightningProcessor(lndHost, macaroon string) *LightningProcessor {
-	// LND typically uses self-signed TLS certificates, so we configure
-	// the HTTP client to accept them. In production, you would pin
-	// the LND TLS certificate instead of skipping verification.
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, // #nosec G402 -- LND uses self-signed TLS certs; replace with cert pinning in production
+// tlsCertPath is the path to LND's tls.cert file for certificate pinning.
+// When provided, the cert is loaded into a dedicated pool and InsecureSkipVerify
+// is disabled.  When empty, a warning is logged and verification is skipped
+// (acceptable for local dev, not for production).
+func NewLightningProcessor(lndHost, macaroon, tlsCertPath string) *LightningProcessor {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	if tlsCertPath != "" {
+		certPEM, err := os.ReadFile(tlsCertPath)
+		if err == nil {
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM(certPEM)
+			tlsConfig.RootCAs = pool
+			log.Printf("[lightning] TLS certificate pinned from %s", tlsCertPath)
+		} else {
+			log.Printf("[lightning] WARNING: could not read TLS cert %s: %v — falling back to InsecureSkipVerify", tlsCertPath, err)
+			tlsConfig.InsecureSkipVerify = true // #nosec G402 -- cert file unreadable; operator should fix lnd_tls_cert_path
+		}
+	} else {
+		log.Printf("[lightning] WARNING: lnd_tls_cert_path not configured — TLS verification disabled. Set this for production use!")
+		tlsConfig.InsecureSkipVerify = true // #nosec G402 -- no cert path provided; configure lnd_tls_cert_path in production
 	}
+
 	transport := &http.Transport{
 		TLSClientConfig: tlsConfig,
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
+
 // Monitor continuously tracks SLA metrics and detects violations.
 type Monitor struct {
 	store *store.Store
@@ -176,6 +177,23 @@ func (m *Monitor) recordViolation(v Violation) {
 
 	log.Printf("[sla] VIOLATION: contract=%s type=%s severity=%s measured=%.2f target=%.2f",
 		v.ContractID, v.Type, v.Severity, v.MeasuredValue, v.TargetValue)
+
+	// Persist to store so violations survive restarts.
+	if m.store != nil {
+		row := &store.SLAViolationRow{
+			ViolationID:   v.ViolationID,
+			ContractID:    v.ContractID,
+			ViolationType: v.Type,
+			Severity:      v.Severity,
+			MeasuredValue: v.MeasuredValue,
+			TargetValue:   v.TargetValue,
+			CreditAmount:  v.CreditAmount,
+			DetectedAt:    v.DetectedAt,
+		}
+		if err := m.store.CreateSLAViolation(context.Background(), row); err != nil {
+			log.Printf("[sla] failed to persist violation %s: %v", v.ViolationID, err)
+		}
+	}
 }
 
 func (m *Monitor) computeCredit(contract *Contract, actualUptime float64) int64 {

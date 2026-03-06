@@ -24,6 +24,12 @@
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "./cmd/soholink-wizard-cli"],
       "port": 0
+    },
+    {
+      "name": "Flutter Mobile App",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["mobile/flutter-app/mock_server.py"],
+      "port": 4000
     }
   ]
 }

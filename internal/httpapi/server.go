@@ -13,8 +13,13 @@ import (
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/governance"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/lbtas"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/moderation"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/orchestration"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/p2p"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/services"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ---------------------------------------------------------------------------
@@ -80,9 +85,22 @@ type Server struct {
 	serviceManager ServiceManager
 	storageBackend StorageBackend
 	mobileHub      *MobileHub
-	rateLimiter    *ipRateLimiter // S2: per-IP rate limiter for mobile endpoints
+	p2pMesh        *p2p.Mesh           // small-world LAN discovery mesh (optional)
+	rateLimiter    *ipRateLimiter      // S2: per-IP rate limiter for mobile endpoints
+	coordMeta      *coordinatorMeta    // non-nil when this node acts as a federation coordinator
+	paymentLedger  *payment.Ledger     // optional, enables real payout dispatch
+	catalog        *services.Catalog   // optional, enables marketplace service endpoints
+	// Content safety (Items 1-3)
+	hashChecker    *moderation.CSAMHashChecker // optional — nil = no hash blocking
+	blocklist      *moderation.DIDBlocklist    // optional — nil = no DID blocking
+	safetyPolicy   *moderation.SafetyPolicy    // optional — nil = no OPA policy check
 	listenAddr     string
 	server         *http.Server
+	// Network security settings (set via Set* methods before Start).
+	tlsCertFile         string   // path to PEM TLS certificate
+	tlsKeyFile          string   // path to PEM TLS private key
+	allowedOrigins      []string // CORS allowed origins; nil/empty = wildcard
+	stripeWebhookSecret string   // Stripe webhook signing secret for signature verification
 }
 
 // NewServer creates a new HTTP API server.
@@ -110,23 +128,91 @@ func (s *Server) SetMobileHub(hub *MobileHub) {
 	s.mobileHub = hub
 }
 
+// SetP2PMesh sets the small-world LAN discovery mesh (optional).
+// Call this before Start so that /api/peers is served with live data.
+func (s *Server) SetP2PMesh(m *p2p.Mesh) {
+	s.p2pMesh = m
+}
+
+// SetPaymentLedger attaches the payment ledger for real payout dispatch.
+// When set, POST /api/revenue/request-payout delegates to the ledger
+// instead of returning a placeholder response.
+func (s *Server) SetPaymentLedger(l *payment.Ledger) {
+	s.paymentLedger = l
+}
+
+// SetServiceCatalog attaches the managed services catalog.
+// When set, marketplace service endpoints become available.
+func (s *Server) SetServiceCatalog(c *services.Catalog) {
+	s.catalog = c
+}
+
+// SetHashChecker attaches the CSAM content hash checker.
+// When set, storage upload endpoints check content SHA-256 against the blocklist.
+func (s *Server) SetHashChecker(hc *moderation.CSAMHashChecker) {
+	s.hashChecker = hc
+}
+
+// SetDIDBlocklist attaches the DID blocklist.
+// When set, all authenticated API calls check the requester DID against the list.
+func (s *Server) SetDIDBlocklist(bl *moderation.DIDBlocklist) {
+	s.blocklist = bl
+}
+
+// SetSafetyPolicy attaches the OPA safety policy evaluator.
+// When set, workload purchase requests are evaluated against safety prohibition rules.
+func (s *Server) SetSafetyPolicy(sp *moderation.SafetyPolicy) {
+	s.safetyPolicy = sp
+}
+
+// SetTLSConfig sets the TLS certificate and key paths.
+// When both are non-empty, Start() uses ListenAndServeTLS instead of ListenAndServe.
+func (s *Server) SetTLSConfig(certFile, keyFile string) {
+	s.tlsCertFile = certFile
+	s.tlsKeyFile = keyFile
+}
+
+// SetAllowedOrigins sets the list of CORS-allowed origins.
+// Use ["*"] for open access (default when empty); restrict to specific domains in production.
+func (s *Server) SetAllowedOrigins(origins []string) {
+	s.allowedOrigins = origins
+}
+
+// SetStripeWebhookSecret sets the Stripe webhook signing secret used to verify
+// the Stripe-Signature header on incoming webhook events.
+func (s *Server) SetStripeWebhookSecret(secret string) {
+	s.stripeWebhookSecret = secret
+}
+
+// limitBodySize is a middleware that caps request bodies at 4 MB, protecting
+// all handlers from large-payload denial-of-service attacks.
+func limitBodySize(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<20) // 4 MB cap
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Start begins listening for HTTP API requests.
 func (s *Server) Start(ctx context.Context) error {
+	// Ensure the owner Ed25519 keypair exists; log the private key once if new.
+	s.ensureOwnerKeypairLogged(ctx)
+
 	mux := http.NewServeMux()
 
-	// Dashboard SPA — serves embedded ui/dashboard/ assets.
-	// /          → redirect to /dashboard
-	// /dashboard → index.html (hash-router handles tab selection)
-	// /dashboard/* → static assets (style.css, app.js, …)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/dashboard", http.StatusFound)
+	// ── Public (no auth required) ──────────────────────────────────────────
+	// Rate-limit challenge to 10 req/min per IP to mitigate brute-force.
+	mux.HandleFunc("/api/auth/challenge", func(w http.ResponseWriter, r *http.Request) {
+		if !s.rateLimiter.Allow(r, 10) {
+			http.Error(w, "Too many requests", http.StatusTooManyRequests)
 			return
 		}
-		http.NotFound(w, r)
+		s.handleAuthChallenge(w, r)
 	})
-	mux.HandleFunc("/dashboard", s.handleDashboard)
-	mux.HandleFunc("/dashboard/", s.handleDashboard)
+	mux.HandleFunc("/api/auth/connect", s.handleAuthConnect)
+
+	// Stripe webhook — public (verified by Stripe-Signature, not device token)
+	mux.HandleFunc("/api/webhooks/stripe", s.handleStripeWebhook)
 
 	// Health and discovery
 	mux.HandleFunc("/api/health", s.handleHealth)
@@ -137,6 +223,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/lbtas/score/", s.handleGetScore)
 	mux.HandleFunc("/api/lbtas/rate-provider", s.handleRateProvider)
 	mux.HandleFunc("/api/lbtas/rate-user", s.handleRateUser)
+
+	// Mobile-app unified revenue endpoint: GET /api/revenue
+	// Must be registered before the sub-path routes so ServeMux exact-matches it.
+	mux.HandleFunc("/api/revenue", s.handleMobileRevenue)
 
 	// Revenue endpoints (Phase 4)
 	mux.HandleFunc("/api/revenue/balance", s.handleGetBalance)
@@ -182,19 +272,61 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/v1/nodes/mobile/register", s.handleMobileRegister)
 	mux.HandleFunc("/api/v1/nodes/mobile", s.handleListMobileNodes)
 
+	// P2P LAN peer discovery (v0.2.0)
+	mux.HandleFunc("/api/peers", s.handlePeers)
+
+	// Federation endpoints (public — provider nodes use Ed25519 signatures, not device tokens)
+	mux.HandleFunc("/api/federation/info", s.handleFederationInfo)
+	mux.HandleFunc("/api/federation/peers", s.handleFederationPeers)
+	mux.HandleFunc("/api/federation/announce", s.handleFederationAnnounce)
+	mux.HandleFunc("/api/federation/heartbeat", s.handleFederationHeartbeat)
+	mux.HandleFunc("/api/federation/deregister", s.handleFederationDeregister)
+
+	// Marketplace endpoints (buyer-side: browse, estimate, purchase, orders)
+	mux.HandleFunc("/api/marketplace/nodes", s.handleMarketplaceNodes)
+	mux.HandleFunc("/api/marketplace/estimate", s.handleMarketplaceEstimate)
+	mux.HandleFunc("/api/marketplace/services", s.handleMarketplaceServices)
+	mux.HandleFunc("/api/marketplace/purchase", s.handleMarketplacePurchase)
+	mux.HandleFunc("/api/marketplace/purchase-service", s.handleMarketplacePurchaseService)
+	mux.HandleFunc("/api/orders", s.handleListOrders)
+	mux.HandleFunc("/api/orders/", s.handleOrderByID) // GET /{id} and POST /{id}/cancel
+
+	// Wallet endpoints (prepaid sats balance, topup, history)
+	mux.HandleFunc("/api/wallet/balance", s.handleWalletBalance)
+	mux.HandleFunc("/api/wallet/topup", s.handleWalletTopup)
+	mux.HandleFunc("/api/wallet/topups", s.handleWalletTopups)
+	mux.HandleFunc("/api/wallet/confirm-topup", s.handleConfirmTopup)
+
+	// Prometheus metrics — public, no auth required.
+	// GET /metrics returns the default Prometheus registry in text exposition format.
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// Content safety admin + federation blocklist pull (Item 1 & 2)
+	s.setupAdminRoutes(mux)
+
 	s.server = &http.Server{
-		Addr:         s.listenAddr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:           s.listenAddr,
+		Handler:        metricsMiddleware(limitBodySize(s.authMiddleware(mux))), // instrument → cap bodies → check auth
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   60 * time.Second,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB header cap
 	}
 
-	log.Printf("[httpapi] API server listening on %s", s.listenAddr)
 	go func() { // #nosec G118 -- context.Background() intentional: shutdown must complete regardless of parent context cancellation
 		<-ctx.Done()
-		s.server.Shutdown(context.Background())
+		s.server.Shutdown(context.Background()) // nolint:errcheck
 	}()
 
+	if s.tlsCertFile != "" && s.tlsKeyFile != "" {
+		log.Printf("[httpapi] TLS enabled; API server listening on %s", s.listenAddr)
+		if err := s.server.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile); err != http.ErrServerClosed {
+			return fmt.Errorf("API server TLS error: %w", err)
+		}
+		return nil
+	}
+	log.Printf("[httpapi] WARNING: TLS disabled — set tls_cert_file/tls_key_file for production")
+	log.Printf("[httpapi] API server listening on %s", s.listenAddr)
 	if err := s.server.ListenAndServe(); err != http.ErrServerClosed {
 		return fmt.Errorf("API server error: %w", err)
 	}
@@ -215,6 +347,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"time":   time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// handlePeers serves GET /api/peers.
+// Returns the list of live LAN-discovered peers from the small-world mesh.
+// If the mesh is not configured, returns an empty list (404-free degradation).
+func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.p2pMesh == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ // #nosec G104
+			"count": 0,
+			"peers": []interface{}{},
+		})
+		return
+	}
+	s.p2pMesh.HandlePeers(w, r)
 }
 
 func (s *Server) handleGetScore(w http.ResponseWriter, r *http.Request) {

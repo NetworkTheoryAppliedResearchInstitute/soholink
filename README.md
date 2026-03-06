@@ -1,6 +1,6 @@
 # SoHoLINK — Federated SOHO Compute Marketplace
 
-[![Go Version](https://img.shields.io/badge/Go-1.24.6-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.25.7-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE.txt)
 [![Build](https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/actions/workflows/build.yml/badge.svg)](https://github.com/NetworkTheoryAppliedResearchInstitute/soholink/actions/workflows/build.yml)
 
@@ -14,11 +14,11 @@ SoHoLINK is a federated compute marketplace for Small Office/Home Office (SOHO) 
 
 | For Providers | For Requesters |
 |---|---|
-| Earn per hour of CPU/storage contributed | Submit workloads to a federated pool of SOHO nodes |
-| Set pricing and resource limits in a wizard | Pay via credit card (Stripe) or Lightning Network |
-| Accept or auto-accept rental requests via OPA policy | Workloads placed by FedScheduler based on constraints |
-| Watch earnings accumulate in real time on the dashboard | Content-addressed data movement via IPFS |
-| Visualize the network on a 3D globe | Results verified before payment is released |
+| Earn per hour of CPU/storage contributed | Browse available SOHO compute nodes — filter by CPU, region, GPU, price, reputation |
+| Set pricing and resource limits in a wizard | Top up a prepaid satoshi wallet via Lightning invoice or Stripe |
+| Accept or auto-accept rental requests via OPA policy | Get instant cost estimates in sats and USD before committing |
+| Watch earnings accumulate in real time on the dashboard | Launch workloads in one API call — wallet debited + workload submitted atomically |
+| Visualize the network on a 3D globe | Track and cancel orders; proportional refund for unused time |
 
 ---
 
@@ -29,12 +29,14 @@ SoHoLINK is a federated compute marketplace for Small Office/Home Office (SOHO) 
 - **IPFS Storage Pool** — Content-addressed data movement via a local Kubo daemon; inputs pinned as CIDs, outputs returned as CIDs, no central file server
 - **Dual-Rail Payments** — Stripe for card payments; Lightning Network for sub-cent micropayments; 1% platform fee, ~97% payout to providers
 - **OPA Policy Governance** — Providers express resource-sharing rules in Rego (max CPU share, bandwidth limits, requester reputation thresholds); auto-accept engine enforces them
-- **Per-Hour Metering** — Billing loop charges requesters per hour of actual usage; Lightning hold invoices (HTLC) release payment only after result verification
+- **Per-Hour Metering** — Billing loop charges requesters per hour of actual usage; `FedScheduler` feeds live placement data to the `UsageMeter` goroutine; Lightning hold invoices (HTLC) release payment only after result verification; provider payouts via `POST /api/revenue/request-payout` with full history at `GET /api/revenue/payouts`
 - **ML-Driven Scheduling** — `LinUCBBandit` contextual bandit replaces round-robin node selection in `ScheduleMobile`; per-node UCB scores learned from HTLC settle/cancel outcomes; `TelemetryRecorder` streams JSONL dispatch events to disk for offline training; falls back to uniform random if no bandit is wired
 - **Setup Wizard (8 steps)** — Guided onboarding: hardware review → pricing → network → payments → K8s edges → IPFS → provisioning limits → policies
 - **Dashboard (8 tabs)** — Overview, Hardware, Orchestration, Storage, Billing, Users, Policies, Logs; all live data, no page refresh needed
 - **3D Globe Visualization** — WebSocket-connected Three.js globe; topology mode and geographic mode (real lat/lon from node metadata); animated data flow arcs
 - **Zero-Dependency Installers** — Statically linked Windows `.exe` + NSIS setup wizard; macOS universal `.pkg`; Linux `.deb`, `.rpm`, AppImage — produced by GoReleaser in one command
+- **P2P LAN Mesh Discovery** — Nodes on the same network automatically find each other via Ed25519-signed multicast UDP announcements (group `239.255.42.99:7946`; RFC 2365, stays on LAN); discovered peers instantly visible to the scheduler and accessible via `GET /api/peers`; topology follows the Watts–Strogatz small-world model — dense local clusters, short global paths
+- **Buyer-Side Marketplace** — Full requester experience: browse provider nodes (filter by CPU, region, GPU, price, reputation); get real-time cost estimates in sats + USD; top up a prepaid satoshi wallet via Lightning or Stripe; purchase and launch workloads in a single atomic call; track and cancel orders with proportional refund — all from REST API or Flutter app
 - **Mobile Participation** *(Go prerequisites complete; native apps in development)* — Android TV always-on compute node; Android "Earn While Charging" client; iOS monitoring and management app
 
 ---
@@ -118,11 +120,12 @@ make dist
 
 | Package | Role |
 |---|---|
+| `internal/p2p/` | Small-world LAN mesh: signed multicast UDP discovery, Ed25519 peer auth, `/api/peers` |
 | `internal/orchestration/` | FedScheduler, auto-scaler, node discovery, mobile scheduling, K8s edge adapter |
 | `internal/ml/` | Pure-Go ML primitives: `LinUCBBandit`, `TelemetryRecorder`, dimension constants |
-| `internal/httpapi/` | REST API + WebSocket hub for mobile node connections |
+| `internal/httpapi/` | 46+ REST endpoints + WebSocket hub; per-IP rate limiting; Ed25519 federation auth; marketplace + wallet handlers |
 | `internal/storage/` | Local content-addressed pool + IPFS HTTP client (Kubo) |
-| `internal/payment/` | Stripe processor, Lightning processor, HTLC hold invoices, metering loop, ledger, settler |
+| `internal/payment/` | Stripe + Lightning processors, HTLC hold invoices, metering loop, ledger, settler, payout system |
 | `internal/notification/` | APNs push notification client (iOS — JWT auth, auto-refresh) |
 | `internal/wasm/` | Wasm task executor interface + stub (wazero implementation: v0.3) |
 | `internal/rental/` | Auto-accept engine for incoming resource requests |
@@ -189,11 +192,22 @@ Lightning Network payments skip the Stripe fee entirely, making sub-cent micropa
 
 ## Security
 
+- **Ed25519 Federation Authentication** — every provider node signs its announce and heartbeat
+  messages with its Ed25519 private key; the coordinator verifies the signature against the
+  stored public key before accepting resource updates or heartbeats; forged registrations return
+  HTTP 401
+- **Rate Limiting on All Mutating Endpoints** — federation announce/deregister: 5 req/IP/min;
+  heartbeat: 10 req/IP/min; mobile WebSocket upgrades: 30 req/IP/min; mobile register:
+  20 req/IP/min; implemented via a per-IP sliding-window `ipRateLimiter`
 - **OPA-enforced resource limits** — providers cannot be exploited beyond their declared policy
-- **TLS 1.2+ minimum** on all K8s edge connections; CA cert pool verified on connection
+- **TLS 1.2+ minimum** on all K8s edge connections and LND Lightning connections; x509 cert
+  pinning on LND via configurable `lnd_tls_cert_path` (PEM CA bundle)
 - **HTLC payment gating** — Lightning hold invoices; payment only releases after result verification
 - **Result replication** — mobile node results verified against a second node before settlement
 - **Tamper-evident accounting** — SHA3-256 Merkle chain over all billing events
+- **Startup config validation** — non-fatal warnings at startup for common misconfigurations:
+  default RADIUS secret, missing payment processor credentials, coordinator without HTTP API,
+  empty node DID, and LND without certificate pinning
 
 ---
 
@@ -240,6 +254,68 @@ All dependencies are vendored (`vendor/`) for reproducible, offline builds.
 AGPL-3.0 — See [LICENSE.txt](LICENSE.txt) for details.
 
 This project is licensed under the GNU Affero General Public License v3.0, ensuring that all modifications remain open source and accessible to the community, supporting the federation sovereignty principles of SoHoLINK.
+
+---
+
+## Mobile App
+
+The Flutter mobile app (`mobile/flutter-app/`) lets you **monitor your node** and **buy compute** from any phone or browser on your network. It includes a full buyer-side marketplace: browse provider nodes, configure workloads, estimate costs, top up your wallet, and launch jobs — all without leaving the app.
+
+### Changing the Node Address
+
+The app ships with the node address hardcoded for zero-setup access. To point it at a different machine, edit **one line**:
+
+```dart
+// mobile/flutter-app/lib/api/soholink_client.dart  (line ~17)
+const kNodeUrl = 'http://192.168.1.220:4000';
+//                        ^^^^^^^^^^^^ change to your node's LAN IP
+//                                     ^^^^ change port if needed (fedaaa default: 8080)
+```
+
+After editing, rebuild the web bundle:
+
+```bash
+cd mobile/flutter-app
+flutter build web
+# then restart the mock/preview server, or point to your live fedaaa instance
+```
+
+### Running the Preview Server (mock data)
+
+```bash
+# From the repo root — serves Flutter web + mock API on port 4000
+python mobile/flutter-app/mock_server.py
+```
+
+Open `http://<your-LAN-IP>:4000` on any device on the same Wi-Fi.
+
+### Connecting to a Live Node
+
+Point `kNodeUrl` at your running `fedaaa` instance (default port 8080).
+The node must expose these REST endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | Returns `{"status":"ok"}` — used to verify connectivity |
+| `GET /api/status` | Node metrics including `btc_usd_rate` for USD conversion |
+| `GET /api/peers` | Federation peer list |
+| `GET /api/revenue` | Earnings history and totals |
+| `GET /api/workloads` | Active rental workloads |
+| `GET /api/marketplace/nodes` | Browse available provider nodes (buyer flow) |
+| `POST /api/marketplace/estimate` | Estimate workload cost in sats + USD |
+| `POST /api/marketplace/purchase` | Buy and launch a workload |
+| `GET /api/wallet/balance` | Prepaid wallet balance |
+| `POST /api/wallet/topup` | Create Lightning invoice or Stripe intent to top up |
+| `GET /api/orders` | Order history |
+| `POST /api/orders/{id}/cancel` | Cancel order and receive proportional refund |
+
+### Currency Display
+
+All earnings are shown in **USD**, converted from satoshis using the live BTC/USD rate the node returns in `btc_usd_rate`. To change currency symbol or locale, update the `NumberFormat.currency(symbol: '\$', ...)` calls in:
+- `lib/pages/dashboard_page.dart`
+- `lib/pages/revenue_page.dart`
+- `lib/pages/workloads_page.dart`
+- `lib/pages/order_page.dart` (cost estimate and wallet balance cards)
 
 ---
 

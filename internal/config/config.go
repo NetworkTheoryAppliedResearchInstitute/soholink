@@ -43,6 +43,7 @@ type Config struct {
 	SLA             SLAConfig             `mapstructure:"sla"`
 	Hypervisor      HypervisorConfig      `mapstructure:"hypervisor"`
 	Blockchain      BlockchainConfig      `mapstructure:"blockchain"`
+	Federation      FederationConfig      `mapstructure:"federation"`
 }
 
 // BlockchainConfig holds settings for the local blockchain anchoring.
@@ -57,6 +58,7 @@ type NodeConfig struct {
 }
 
 type RadiusConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
 	AuthAddress  string `mapstructure:"auth_address"`
 	AcctAddress  string `mapstructure:"acct_address"`
 	SharedSecret string `mapstructure:"shared_secret"`
@@ -69,7 +71,8 @@ type AuthConfig struct {
 }
 
 type StorageConfig struct {
-	BasePath string `mapstructure:"base_path"`
+	BasePath    string `mapstructure:"base_path"`
+	IPFSAPIAddr string `mapstructure:"ipfs_api_addr"` // e.g. "http://127.0.0.1:5001"; "" disables IPFS announcements
 }
 
 type PolicyConfig struct {
@@ -100,6 +103,15 @@ type ResourceSharingConfig struct {
 	StoragePool    StoragePoolConfig   `mapstructure:"storage_pool"`
 	Printer        PrinterConfig       `mapstructure:"printer"`
 	Portal         PortalConfig        `mapstructure:"portal"`
+
+	// TLS: paths to PEM-encoded certificate and private key.
+	// When both are set, the API server uses HTTPS (ListenAndServeTLS).
+	TLSCertFile string `mapstructure:"tls_cert_file"`
+	TLSKeyFile  string `mapstructure:"tls_key_file"`
+
+	// AllowedOrigins controls the CORS Access-Control-Allow-Origin header.
+	// Use ["*"] for open-access (default); restrict to specific origins in production.
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }
 
 // ComputeConfig holds settings for the compute sharing subsystem.
@@ -142,6 +154,11 @@ type PaymentConfig struct {
 	Processors                []PaymentProcessorEntry `mapstructure:"processors"`
 	OfflineSettlementInterval string                  `mapstructure:"offline_settlement_interval"`
 	MaxOfflineQueue           int                     `mapstructure:"max_offline_queue"`
+
+	// StripeWebhookSecret is the signing secret from the Stripe Dashboard
+	// (Settings → Webhooks). Used to verify the Stripe-Signature header on
+	// incoming webhook events.  Set via env SOHOLINK_PAYMENT_STRIPE_WEBHOOK_SECRET.
+	StripeWebhookSecret string `mapstructure:"stripe_webhook_secret"`
 }
 
 // PaymentProcessorEntry describes a configured payment processor.
@@ -151,6 +168,8 @@ type PaymentProcessorEntry struct {
 	FederationOnly bool   `mapstructure:"federation_only"`
 	SecretKeyEnv   string `mapstructure:"secret_key_env"`
 	LNDHost        string `mapstructure:"lnd_host"`
+	LNDMacaroonEnv string `mapstructure:"lnd_macaroon_env"` // env var holding the hex macaroon
+	LNDTLSCertPath string `mapstructure:"lnd_tls_cert_path"` // path to LND tls.cert for certificate pinning
 	Contract       string `mapstructure:"contract"`
 }
 
@@ -175,6 +194,12 @@ type CentralConfig struct {
 type P2PConfig struct {
 	Enabled    bool   `mapstructure:"enabled"`
 	ListenAddr string `mapstructure:"listen_addr"`
+
+	// AllowedNodeDIDs is an optional allowlist of peer DIDs.
+	// When non-empty, the mesh will silently drop announcements from any DID
+	// not in this list, preventing unknown nodes from appearing in the
+	// federation registry.  Leave empty to allow all verified peers (default).
+	AllowedNodeDIDs []string `mapstructure:"allowed_node_dids"`
 }
 
 // RentalConfig holds settings for the rental management subsystem.
@@ -209,6 +234,37 @@ type SLAConfig struct {
 	Enabled     bool   `mapstructure:"enabled"`
 	DefaultTier string `mapstructure:"default_tier"`
 	CheckInterval string `mapstructure:"check_interval"`
+}
+
+// FederationConfig holds settings for the federation layer.
+// Provider nodes announce themselves to a coordinator; coordinator nodes
+// serve the registry and earn the platform fee on facilitated transactions.
+type FederationConfig struct {
+	// ── Provider settings ─────────────────────────────────────────────────
+	// CoordinatorURL is the base URL of the coordinator this node registers
+	// with on startup. Empty means standalone (no federation).
+	CoordinatorURL string `mapstructure:"coordinator_url"`
+
+	// Region is a geographic hint used for workload placement decisions.
+	// Follows AWS-style naming, e.g. "us-east-1", "eu-west-1".
+	Region string `mapstructure:"region"`
+
+	// PricePerCPUHourSats is the advertised price for 1 CPU-core-hour in sats.
+	PricePerCPUHourSats int64 `mapstructure:"price_per_cpu_hour_sats"`
+
+	// HeartbeatInterval controls how often the node re-announces resource
+	// availability to its coordinator. Default: 30s.
+	HeartbeatInterval string `mapstructure:"heartbeat_interval"`
+
+	// ── Coordinator settings ───────────────────────────────────────────────
+	// IsCoordinator enables the coordinator API endpoints on this node.
+	// Any node can act as a coordinator; smaller networks may use the same
+	// machine for both provider and coordinator roles.
+	IsCoordinator bool `mapstructure:"is_coordinator"`
+
+	// FeePercent is the percentage of each transaction the coordinator earns.
+	// Default 1.0 (1%). Set lower to attract more providers.
+	FeePercent float64 `mapstructure:"fee_percent"`
 }
 
 // HypervisorConfig holds settings for the bare-metal hypervisor isolation.

@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Content-Security-Policy: no inline eval; assets from self + Google Fonts only -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
 <title>NTARI OS — Network Graph</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&family=DM+Serif+Display:ital@0;1&display=swap');
@@ -1061,9 +1065,14 @@ function selectNode(node) {
   }
 
   const topicsEl = document.getElementById('panel-topics');
-  topicsEl.innerHTML = node.topics.map(t =>
-    `<span class="topic-pill">${t}</span>`
-  ).join('');
+  // Build topic pills via DOM API to prevent XSS from untrusted topic strings.
+  topicsEl.textContent = '';
+  (node.topics || []).forEach(t => {
+    const pill = document.createElement('span');
+    pill.className = 'topic-pill';
+    pill.textContent = t;          // textContent is XSS-safe
+    topicsEl.appendChild(pill);
+  });
 
   panel.classList.add('visible');
 }
@@ -1087,17 +1096,28 @@ searchInput.addEventListener('input', () => {
     n.name.includes(q) || n.topics.some(t => t.includes(q))
   ).slice(0, 6);
 
+  // Build search results via DOM API to prevent XSS from untrusted node names/IDs.
+  searchResults.textContent = '';
   if (!matches.length) {
-    searchResults.innerHTML = `<div class="search-result-item" style="color:var(--text-muted)">No nodes found</div>`;
+    const empty = document.createElement('div');
+    empty.className = 'search-result-item';
+    empty.style.color = 'var(--text-muted)';
+    empty.textContent = 'No nodes found';
+    searchResults.appendChild(empty);
   } else {
-    searchResults.innerHTML = matches.map(n =>
-      `<div class="search-result-item" data-id="${n.id}">
-        <div class="result-dot"></div>${n.name}
-      </div>`
-    ).join('');
-    searchResults.querySelectorAll('[data-id]').forEach(el => {
-      el.addEventListener('click', () => {
-        const node = state.nodes.find(n => n.id === el.dataset.id);
+    matches.forEach(n => {
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      // Store the node id in a data attribute safely via dataset (no HTML injection).
+      item.dataset.id = n.id;
+      const dot = document.createElement('div');
+      dot.className = 'result-dot';
+      item.appendChild(dot);
+      const name = document.createElement('span');
+      name.textContent = n.name;   // textContent is XSS-safe
+      item.appendChild(name);
+      item.addEventListener('click', () => {
+        const node = state.nodes.find(nd => nd.id === item.dataset.id);
         if (node) {
           selectNode(node);
           // Orient globe toward the node
@@ -1109,6 +1129,7 @@ searchInput.addEventListener('input', () => {
         searchResults.classList.remove('visible');
         searchInput.value = '';
       });
+      searchResults.appendChild(item);
     });
   }
   searchResults.classList.add('visible');

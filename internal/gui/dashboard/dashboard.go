@@ -173,6 +173,7 @@ func buildDashboard(w fyne.Window, application *app.App) fyne.CanvasObject {
 		buildOrchestrationTab(w, application),
 		buildStorageTab(w, application),
 		buildBillingTab(w, application),
+		buildMarketplaceTab(w, application),
 		buildUsersTab(w, application),
 		buildPoliciesTab(w, application),
 		buildLogsTab(w, application),
@@ -254,10 +255,41 @@ func buildOverviewTab(w fyne.Window, application *app.App) *container.TabItem {
 		),
 	)
 
+	// Wallet balance tile (reads live from payment ledger when available)
+	var walletCard *widget.Card
+	if application.PaymentLedger != nil {
+		balanceSats, err := application.PaymentLedger.GetWalletBalance(ctx, did)
+		balStr := "unavailable"
+		if err == nil {
+			balStr = fmt.Sprintf("%d sats", balanceSats)
+		}
+		walletCard = widget.NewCard("Wallet Balance", "Prepaid sats — deducted at purchase",
+			container.NewVBox(
+				labelPair("Balance", balStr),
+			),
+		)
+	} else {
+		walletCard = widget.NewCard("Wallet Balance", "",
+			widget.NewLabel("Payment ledger not initialized."),
+		)
+	}
+
+	// Legal compliance notice — always visible to node operator.
+	complianceCard := widget.NewCard("Legal Compliance", "Required before accepting workloads",
+		container.NewVBox(
+			widget.NewLabel("• Prohibited content (CSAM, malware, botnet tools) is blocked and reported automatically."),
+			widget.NewLabel("• All workload purchases require a signed manifest — stored permanently for audit."),
+			widget.NewLabel("• CSAM is reported to NCMEC within 24 hours as required by 18 U.S.C. § 2258A."),
+			widget.NewLabel("• Acceptable Use Policy: https://ntari.org/aup"),
+			widget.NewLabel("• Legal/DMCA: legal@soholink.network"),
+		),
+	)
+
 	content := container.NewVBox(
 		statsCard,
 		container.NewGridWithColumns(2, identityCard, healthCard),
-		dataCard,
+		container.NewGridWithColumns(2, walletCard, dataCard),
+		complianceCard,
 	)
 
 	return container.NewTabItem("Overview", container.NewScroll(container.NewPadded(content)))
@@ -559,7 +591,82 @@ func buildBillingTab(w fyne.Window, application *app.App) *container.TabItem {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tab 6 — Users
+// Tab 6 — Plan Work (Marketplace / Buyer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+func buildMarketplaceTab(w fyne.Window, application *app.App) *container.TabItem {
+	ctx := context.Background()
+
+	// Build a manifest entry form. Fields mirror the WorkloadManifest schema.
+	purposeSelect := widget.NewSelect([]string{
+		"data_processing", "ml_training", "rendering", "web_serving",
+		"simulation", "scientific_compute", "media_encoding", "other",
+	}, nil)
+	purposeSelect.SetSelected("data_processing")
+
+	descEntry := widget.NewMultiLineEntry()
+	descEntry.SetPlaceHolder("Describe the workload in at least 20 characters…")
+	descEntry.SetMinRowsVisible(3)
+
+	networkSelect := widget.NewSelect([]string{"none", "declared_only", "unrestricted"}, nil)
+	networkSelect.SetSelected("none")
+
+	endpointsEntry := widget.NewEntry()
+	endpointsEntry.SetPlaceHolder("comma-separated, e.g. api.example.com:443  (required if network ≠ none)")
+
+	hwCheck := widget.NewCheck("Requires hardware access (GPIO / serial / USB)", nil)
+
+	manifestForm := widget.NewCard("Workload Manifest", "Required for every purchase (stored permanently for audit)",
+		container.NewVBox(
+			widget.NewForm(
+				widget.NewFormItem("Purpose category", purposeSelect),
+				widget.NewFormItem("Description (≥ 20 chars)", descEntry),
+				widget.NewFormItem("Network access", networkSelect),
+				widget.NewFormItem("External endpoints", endpointsEntry),
+				widget.NewFormItem("Hardware access", hwCheck),
+			),
+		),
+	)
+
+	// Marketplace node browser — pulls from the HTTP API if running locally.
+	nodeList := widget.NewLabel("Node list: connect the HTTP API to browse live provider nodes.")
+	nodeCard := widget.NewCard("Available Providers", "Fetched from local API",
+		container.NewVBox(nodeList),
+	)
+
+	// Attempt to load marketplace nodes from the local API
+	go func() {
+		ownerDID, _ := application.Store.GetNodeInfo(ctx, "owner_did")
+		if ownerDID == "" {
+			return
+		}
+		resp, err := http.Get("http://127.0.0.1:8080/api/marketplace/nodes") // #nosec G107 — localhost only
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return
+		}
+		nodeList.SetText("API reachable — use the mobile app or curl to browse and purchase workloads.\n\nEndpoint: GET http://127.0.0.1:8080/api/marketplace/nodes")
+	}()
+
+	// Compliance reminder in the plan-work context.
+	complianceReminder := widget.NewCard("AUP Reminder", "",
+		widget.NewLabel(
+			"By submitting a workload you certify the manifest is truthful.\n"+
+				"False declarations result in DID suspension and wallet balance forfeiture.\n"+
+				"Prohibited workloads (CSAM, malware, botnet tools) are blocked automatically.\n"+
+				"See docs/TERMS_OF_SERVICE.md for the full Acceptable Use Policy.",
+		),
+	)
+
+	content := container.NewVBox(manifestForm, nodeCard, complianceReminder)
+	return container.NewTabItem("Plan Work", container.NewScroll(container.NewPadded(content)))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab 7 — Users
 // ─────────────────────────────────────────────────────────────────────────────
 
 func buildUsersTab(w fyne.Window, application *app.App) *container.TabItem {

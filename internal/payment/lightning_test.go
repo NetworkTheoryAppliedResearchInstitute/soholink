@@ -12,7 +12,7 @@ import (
 
 // TestLightningProcessor_Name verifies the processor name.
 func TestLightningProcessor_Name(t *testing.T) {
-	p := NewLightningProcessor("localhost:8080", "macaroon_hex")
+	p := NewLightningProcessor("localhost:8080", "macaroon_hex", "")
 	if got := p.Name(); got != "lightning" {
 		t.Errorf("Name() = %q, want %q", got, "lightning")
 	}
@@ -39,7 +39,7 @@ func TestLightningProcessor_IsOnline(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewLightningProcessor(tt.lndHost, "macaroon_hex")
+			p := NewLightningProcessor(tt.lndHost, "macaroon_hex", "")
 			if got := p.IsOnline(context.Background()); got != tt.want {
 				t.Errorf("IsOnline() = %v, want %v", got, tt.want)
 			}
@@ -100,7 +100,7 @@ func TestLightningProcessor_CreateCharge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.lndHost == "" {
-				p := NewLightningProcessor(tt.lndHost, "macaroon_hex")
+				p := NewLightningProcessor(tt.lndHost, "macaroon_hex", "")
 				_, err := p.CreateCharge(context.Background(), tt.request)
 				if (err != nil) != tt.wantErr {
 					t.Errorf("CreateCharge() error = %v, wantErr %v", err, tt.wantErr)
@@ -131,7 +131,7 @@ func TestLightningProcessor_CreateCharge(t *testing.T) {
 
 			// Extract host from test server URL
 			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex")
+			p := NewLightningProcessor(host, "macaroon_hex", "")
 
 			result, err := p.CreateCharge(context.Background(), tt.request)
 			if (err != nil) != tt.wantErr {
@@ -201,7 +201,7 @@ func TestLightningProcessor_ConfirmCharge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.lndHost == "" {
-				p := NewLightningProcessor(tt.lndHost, "macaroon_hex")
+				p := NewLightningProcessor(tt.lndHost, "macaroon_hex", "")
 				err := p.ConfirmCharge(context.Background(), tt.chargeID)
 				if err == nil {
 					t.Error("Expected error with no LND host")
@@ -219,7 +219,7 @@ func TestLightningProcessor_ConfirmCharge(t *testing.T) {
 			defer server.Close()
 
 			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex")
+			p := NewLightningProcessor(host, "macaroon_hex", "")
 
 			err := p.ConfirmCharge(context.Background(), tt.chargeID)
 			if (err != nil) != tt.wantErr {
@@ -300,7 +300,7 @@ func TestLightningProcessor_GetChargeStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.lndHost == "" {
-				p := NewLightningProcessor(tt.lndHost, "macaroon_hex")
+				p := NewLightningProcessor(tt.lndHost, "macaroon_hex", "")
 				_, err := p.GetChargeStatus(context.Background(), tt.chargeID)
 				if err == nil {
 					t.Error("Expected error with no LND host")
@@ -315,7 +315,7 @@ func TestLightningProcessor_GetChargeStatus(t *testing.T) {
 			defer server.Close()
 
 			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex")
+			p := NewLightningProcessor(host, "macaroon_hex", "")
 
 			status, err := p.GetChargeStatus(context.Background(), tt.chargeID)
 			if (err != nil) != tt.wantErr {
@@ -404,7 +404,7 @@ func TestLightningProcessor_ListCharges(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.lndHost == "" {
-				p := NewLightningProcessor(tt.lndHost, "macaroon_hex")
+				p := NewLightningProcessor(tt.lndHost, "macaroon_hex", "")
 				_, err := p.ListCharges(context.Background(), tt.filter)
 				if err == nil {
 					t.Error("Expected error with no LND host")
@@ -435,7 +435,7 @@ func TestLightningProcessor_ListCharges(t *testing.T) {
 			defer server.Close()
 
 			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex")
+			p := NewLightningProcessor(host, "macaroon_hex", "")
 
 			charges, err := p.ListCharges(context.Background(), tt.filter)
 			if (err != nil) != tt.wantErr {
@@ -498,7 +498,7 @@ func TestLightningProcessor_RefundCharge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.lndHost == "" {
-				p := NewLightningProcessor(tt.lndHost, "macaroon_hex")
+				p := NewLightningProcessor(tt.lndHost, "macaroon_hex", "")
 				err := p.RefundCharge(context.Background(), tt.chargeID, tt.reason)
 				if err == nil {
 					t.Error("Expected error with no LND host")
@@ -520,7 +520,7 @@ func TestLightningProcessor_RefundCharge(t *testing.T) {
 			defer server.Close()
 
 			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex")
+			p := NewLightningProcessor(host, "macaroon_hex", "")
 
 			err := p.RefundCharge(context.Background(), tt.chargeID, tt.reason)
 			if (err != nil) != tt.wantErr {
@@ -557,7 +557,7 @@ func TestMapLNDStatus(t *testing.T) {
 
 // TestLightningProcessor_TLSConfiguration tests TLS settings.
 func TestLightningProcessor_TLSConfiguration(t *testing.T) {
-	p := NewLightningProcessor("localhost:8080", "macaroon_hex")
+	p := NewLightningProcessor("localhost:8080", "macaroon_hex", "")
 
 	// Verify TLS client is configured
 	if p.client == nil {
@@ -593,7 +593,7 @@ func TestLightningProcessor_DoLNDRequest(t *testing.T) {
 	defer server.Close()
 
 	host := strings.TrimPrefix(server.URL, "https://")
-	p := NewLightningProcessor(host, "test_macaroon")
+	p := NewLightningProcessor(host, "test_macaroon", "")
 
 	body, err := p.doLNDRequest(context.Background(), http.MethodGet, "/test", nil)
 	if err != nil {

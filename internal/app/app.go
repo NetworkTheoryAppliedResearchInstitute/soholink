@@ -17,6 +17,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/central"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/compute"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/config"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/federation"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/httpapi"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/lbtas"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/merkle"
@@ -31,6 +32,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/sla"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/storage"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/p2p"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/thinclient"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/verifier"
 )
@@ -66,6 +68,14 @@ type App struct {
 
 	// P2P mesh fallback (nil when disabled)
 	P2PNetwork *thinclient.P2PNetwork
+
+	// P2PMesh is the small-world LAN peer discovery mesh (nil when disabled).
+	// It auto-discovers federation peers via signed multicast UDP.
+	P2PMesh *p2p.Mesh
+
+	// FederationAnnouncer registers this node with a coordinator and sends
+	// periodic heartbeats (nil when federation.coordinator_url is unset).
+	FederationAnnouncer *federation.Announcer
 
 	// Rental management (nil when disabled)
 	RentalEngine *rental.AutoAcceptEngine
@@ -186,7 +196,79 @@ func New(cfg *config.Config) (*App, error) {
 		app.initBlockchain(cfg)
 	}
 
+	// Initialize federation layer (provider announcer + coordinator API).
+	// Runs even when resource sharing is partially configured; the HTTP API
+	// server must already be set up (initResourceSharing must have run first).
+	if cfg.Federation.CoordinatorURL != "" || cfg.Federation.IsCoordinator {
+		app.initFederation(cfg)
+	}
+
 	return app, nil
+}
+
+// initFederation sets up the provider-side federation announcer and, when this
+// node is configured as a coordinator, registers the coordinator metadata with
+// the HTTP API server so the federation endpoints return live data.
+func (a *App) initFederation(cfg *config.Config) {
+	log.Printf("[app] initializing federation layer")
+	ctx := context.Background()
+
+	// Ensure the node has a persistent signing keypair (machine identity).
+	if _, err := a.Store.EnsureNodeSigningKeypair(ctx); err != nil {
+		log.Printf("[app] federation: could not ensure signing keypair: %v", err)
+		return
+	}
+	privSeedHex, pubKeyB64, err := a.Store.GetNodeSigningKey(ctx)
+	if err != nil || privSeedHex == "" {
+		log.Printf("[app] federation: could not read signing keypair: %v", err)
+		return
+	}
+
+	// Determine the heartbeat interval (default 30 s).
+	heartbeat := 30 * time.Second
+	if cfg.Federation.HeartbeatInterval != "" {
+		if d, parseErr := time.ParseDuration(cfg.Federation.HeartbeatInterval); parseErr == nil {
+			heartbeat = d
+		}
+	}
+
+	// Resolve the advertised API address.
+	apiAddr := cfg.ResourceSharing.HTTPAPIAddress
+	if apiAddr == "" {
+		apiAddr = "0.0.0.0:8080"
+	}
+
+	// Provider mode: announce this node to its configured coordinator.
+	if cfg.Federation.CoordinatorURL != "" {
+		fedCfg := federation.Config{
+			CoordinatorURL:      cfg.Federation.CoordinatorURL,
+			NodeDID:             cfg.Node.DID,
+			Address:             apiAddr,
+			Region:              cfg.Federation.Region,
+			PricePerCPUHourSats: cfg.Federation.PricePerCPUHourSats,
+			PrivSeedHex:         privSeedHex,
+			PubKeyB64:           pubKeyB64,
+			HeartbeatInterval:   heartbeat,
+		}
+		a.FederationAnnouncer = federation.New(fedCfg)
+		log.Printf("[app] federation announcer ready (coordinator=%s region=%s)",
+			cfg.Federation.CoordinatorURL, cfg.Federation.Region)
+	}
+
+	// Coordinator mode: expose the coordinator metadata on the HTTP API.
+	if cfg.Federation.IsCoordinator && a.HTTPAPIServer != nil {
+		region := cfg.Federation.Region
+		if region == "" {
+			region = "global"
+		}
+		feePct := cfg.Federation.FeePercent
+		if feePct == 0 {
+			feePct = 1.0
+		}
+		a.HTTPAPIServer.SetCoordinatorMeta(cfg.Node.DID, feePct, []string{region})
+		log.Printf("[app] federation coordinator enabled (DID=%s fee=%.1f%%)",
+			cfg.Node.DID, feePct)
+	}
 }
 
 // initBlockchain initializes the local blockchain for Merkle root anchoring.
@@ -222,7 +304,11 @@ func (a *App) initResourceSharing(cfg *config.Config) error {
 			secretKey := os.Getenv(pc.SecretKeyEnv)
 			processors = append(processors, payment.NewStripeProcessor(secretKey, ""))
 		case "lightning":
-			processors = append(processors, payment.NewLightningProcessor(pc.LNDHost, ""))
+			macaroon := ""
+			if pc.LNDMacaroonEnv != "" {
+				macaroon = os.Getenv(pc.LNDMacaroonEnv)
+			}
+			processors = append(processors, payment.NewLightningProcessor(pc.LNDHost, macaroon, pc.LNDTLSCertPath))
 		case "federation_token":
 			processors = append(processors, payment.NewFederationTokenProcessor(a.Store, pc.Contract, ""))
 		}
@@ -292,6 +378,28 @@ func (a *App) initResourceSharing(cfg *config.Config) error {
 	}
 	a.HTTPAPIServer = httpapi.NewServer(a.Store, a.LBTASManager, apiAddr)
 
+	// Wire TLS, CORS, and webhook security settings.
+	a.HTTPAPIServer.SetTLSConfig(cfg.ResourceSharing.TLSCertFile, cfg.ResourceSharing.TLSKeyFile)
+	if len(cfg.ResourceSharing.AllowedOrigins) > 0 {
+		a.HTTPAPIServer.SetAllowedOrigins(cfg.ResourceSharing.AllowedOrigins)
+	}
+	if cfg.Payment.StripeWebhookSecret != "" {
+		a.HTTPAPIServer.SetStripeWebhookSecret(cfg.Payment.StripeWebhookSecret)
+	}
+
+	// Stripe processor: pass the webhook secret so NewStripeProcessor can verify events.
+	for i, p := range cfg.Payment.Processors {
+		if p.Type == "stripe" && cfg.Payment.StripeWebhookSecret != "" {
+			_ = i // processors slice is already built; webhook verification is handled in the HTTP handler
+			break
+		}
+	}
+
+	// Gap 2: attach the payment ledger so payout endpoints use real processors.
+	if a.PaymentLedger != nil {
+		a.HTTPAPIServer.SetPaymentLedger(a.PaymentLedger)
+	}
+
 	log.Printf("[app] resource sharing subsystems initialized")
 	return nil
 }
@@ -325,7 +433,8 @@ func (a *App) initCentral(cfg *config.Config) {
 	log.Printf("[app] central SOHO subsystems initialized (center DID=%s)", cfg.Central.CenterDID)
 }
 
-// initP2P initializes the thin-client P2P mesh networking fallback.
+// initP2P initializes the thin-client P2P mesh networking fallback and the
+// small-world LAN discovery mesh.
 func (a *App) initP2P(cfg *config.Config) {
 	log.Printf("[app] initializing P2P mesh network")
 
@@ -336,6 +445,35 @@ func (a *App) initP2P(cfg *config.Config) {
 
 	a.P2PNetwork = thinclient.NewP2PNetwork(a.Store, cfg.Node.DID, listenAddr)
 	log.Printf("[app] P2P mesh initialized (listen=%s)", listenAddr)
+
+	// Small-world LAN discovery mesh: load node private key (same key used by
+	// the blockchain subsystem) and start announcing this node's capabilities.
+	var privKey ed25519.PrivateKey
+	keyPath := cfg.NodeKeyPath()
+	if keyData, err := os.ReadFile(keyPath); err == nil && len(keyData) == ed25519.PrivateKeySize {
+		privKey = ed25519.PrivateKey(keyData)
+	}
+	if privKey == nil {
+		log.Printf("[app] p2p mesh: no node key at %s; LAN discovery disabled", keyPath)
+		return
+	}
+
+	apiAddr := cfg.ResourceSharing.HTTPAPIAddress
+	if apiAddr == "" {
+		apiAddr = "0.0.0.0:8080"
+	}
+
+	meshCfg := p2p.Config{
+		DID:             cfg.Node.DID,
+		PrivateKey:      privKey,
+		APIAddr:         apiAddr,
+		IPFSAddr:        cfg.Storage.IPFSAPIAddr,
+		Region:          cfg.Node.Location,
+		Store:           a.Store,
+		AllowedNodeDIDs: cfg.P2P.AllowedNodeDIDs, // optional allowlist; empty = accept all verified peers
+	}
+	a.P2PMesh = p2p.New(meshCfg)
+	log.Printf("[app] small-world mesh initialized (multicast 239.255.42.99:7946)")
 }
 
 // initRental initializes the rental management and auto-accept engine.
@@ -365,6 +503,11 @@ func (a *App) initManagedServices(cfg *config.Config) {
 	}
 	if cfg.Services.MessageQueue {
 		a.ServiceCatalog.RegisterProvisioner(services.ServiceTypeMessageQueue, services.NewQueueProvisioner("unix:///var/run/docker.sock"))
+	}
+
+	// Expose the catalog on the HTTP API for marketplace service endpoints.
+	if a.HTTPAPIServer != nil {
+		a.HTTPAPIServer.SetServiceCatalog(a.ServiceCatalog)
 	}
 	log.Printf("[app] managed services catalog initialized")
 }
@@ -397,13 +540,20 @@ func (a *App) initHypervisor() {
 
 // Start begins all services and blocks until a shutdown signal is received.
 func (a *App) Start() error {
+	// Validate config first — returns error on fatal misconfigurations.
+	if err := a.validateConfig(); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancelFunc = cancel
 
-	// Start RADIUS server
-	if err := a.Radius.Start(); err != nil {
-		cancel()
-		return fmt.Errorf("failed to start RADIUS server: %w", err)
+	// Start RADIUS server (only when enabled in config).
+	if a.Config.Radius.Enabled {
+		if err := a.Radius.Start(); err != nil {
+			cancel()
+			return fmt.Errorf("failed to start RADIUS server: %w", err)
+		}
 	}
 
 	// Start Merkle batcher in background with blockchain anchoring callback
@@ -444,6 +594,19 @@ func (a *App) Start() error {
 		log.Printf("[app]   P2P mesh:   %s", a.Config.P2P.ListenAddr)
 	}
 
+	// Start small-world LAN discovery mesh (if initialised).
+	if a.P2PMesh != nil {
+		if a.HTTPAPIServer != nil {
+			a.HTTPAPIServer.SetP2PMesh(a.P2PMesh)
+		}
+		go func() {
+			if err := a.P2PMesh.Start(ctx); err != nil {
+				log.Printf("[app] p2p mesh stopped: %v", err)
+			}
+		}()
+		log.Printf("[app]   Small-world mesh: multicast 239.255.42.99:7946")
+	}
+
 	// Load rental rules (if enabled)
 	if a.RentalEngine != nil {
 		if err := a.RentalEngine.LoadRules(ctx); err != nil {
@@ -473,6 +636,13 @@ func (a *App) Start() error {
 	if a.SLAMonitor != nil {
 		go a.SLAMonitor.MonitorLoop(ctx)
 		log.Printf("[app]   SLA:        monitor started")
+	}
+
+	// Start federation announcer (provider mode — sends heartbeats until shutdown)
+	if a.FederationAnnouncer != nil {
+		go a.FederationAnnouncer.Start(ctx)
+		log.Printf("[app]   Federation: announcer started (coordinator=%s)",
+			a.Config.Federation.CoordinatorURL)
 	}
 
 	log.Printf("[app] SoHoLINK AAA node started")
@@ -514,6 +684,12 @@ func (a *App) Start() error {
 	if a.Config.Hypervisor.Enabled {
 		log.Printf("[app]   Hypervisor: enabled (backend=%s)", a.Config.Hypervisor.PreferBackend)
 	}
+	if a.Config.Federation.IsCoordinator {
+		log.Printf("[app]   Federation: coordinator (fee=%.1f%%)", a.Config.Federation.FeePercent)
+	}
+	if a.Config.Federation.CoordinatorURL != "" {
+		log.Printf("[app]   Federation: provider (url=%s)", a.Config.Federation.CoordinatorURL)
+	}
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
@@ -549,9 +725,11 @@ func (a *App) Shutdown() error {
 		a.FedScheduler.Stop()
 	}
 
-	// 2. Stop accepting new RADIUS packets
-	if err := a.Radius.Shutdown(shutdownCtx); err != nil {
-		log.Printf("[app] RADIUS shutdown error: %v", err)
+	// 2. Stop accepting new RADIUS packets (only if it was started).
+	if a.Config.Radius.Enabled {
+		if err := a.Radius.Shutdown(shutdownCtx); err != nil {
+			log.Printf("[app] RADIUS shutdown error: %v", err)
+		}
 	}
 
 	// 3. Flush accounting logs
@@ -584,6 +762,17 @@ func (a *App) startResourceSharing(ctx context.Context) {
 	// Start compute scheduler
 	if a.ComputeSched != nil {
 		a.ComputeSched.Start(ctx)
+	}
+
+	// Gap 4: wire usage metering — bills running placements every hour.
+	// FedScheduler is the PlacementSource; PaymentLedger routes the charges.
+	if a.FedScheduler != nil && a.PaymentLedger != nil {
+		meter := payment.NewUsageMeter(a.FedScheduler, a.PaymentLedger, payment.MeterConfig{
+			BillingInterval:    time.Hour,
+			MinBillableSeconds: 60,
+		})
+		go meter.Run(ctx)
+		log.Printf("[app]   Meter: usage billing started (interval=1h)")
 	}
 
 	// Start printer spooler

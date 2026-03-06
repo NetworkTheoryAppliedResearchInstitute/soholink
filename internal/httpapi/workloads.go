@@ -319,7 +319,7 @@ func (s *Server) routeWorkload(w http.ResponseWriter, r *http.Request) {
 	// List workloads: GET /api/workloads
 	if path == "" || path == "/" {
 		if r.Method == http.MethodGet {
-			s.handleListWorkloads(w, r)
+			s.handleMobileWorkloads(w, r)
 			return
 		}
 		if r.Method == http.MethodPost {

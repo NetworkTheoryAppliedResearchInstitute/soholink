@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/ml"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
@@ -81,6 +82,16 @@ func (s *FedScheduler) Stop() {
 	log.Printf("[orchestration] FedScheduler stopping")
 }
 
+// FindNodes filters the federation node registry using the provided query and
+// returns matching nodes sorted by reputation score (highest first).
+// This exposes the internal NodeDiscovery to the marketplace HTTP API.
+func (s *FedScheduler) FindNodes(ctx context.Context, q NodeQuery) ([]*Node, error) {
+	if s.discovery == nil {
+		return nil, fmt.Errorf("node discovery not initialised")
+	}
+	return s.discovery.FindNodes(ctx, q)
+}
+
 // SubmitWorkload queues a workload for scheduling.
 func (s *FedScheduler) SubmitWorkload(w *Workload) {
 	w.Status = "pending"
@@ -113,6 +124,37 @@ func (s *FedScheduler) ListActiveWorkloads() []*WorkloadState {
 		})
 	}
 	return result
+}
+
+// ActivePlacements implements payment.PlacementSource.
+// Returns a snapshot of all currently-running placement billing records.
+// Only placements with status "running" are included; pending/failed are skipped.
+func (s *FedScheduler) ActivePlacements() []payment.ActivePlacement {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []payment.ActivePlacement
+	for _, state := range s.ActiveWorkloads {
+		if state.Workload == nil {
+			continue
+		}
+		for _, p := range state.Placements {
+			if p.Status != "running" {
+				continue
+			}
+			out = append(out, payment.ActivePlacement{
+				PlacementID:  p.PlacementID,
+				WorkloadID:   state.Workload.WorkloadID,
+				OwnerDID:     state.Workload.OwnerDID,
+				ProviderDID:  p.NodeDID,
+				CPUCores:     state.Workload.Spec.CPUCores,
+				MemoryMB:     state.Workload.Spec.MemoryMB,
+				DiskGB:       state.Workload.Spec.DiskGB,
+				PricePerHour: 0, // populated from federation_nodes registry by caller when needed
+				StartedAt:    p.StartedAt,
+			})
+		}
+	}
+	return out
 }
 
 // scheduleLoop pulls workloads from the pending queue and schedules them.

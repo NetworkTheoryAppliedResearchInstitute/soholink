@@ -3,6 +3,7 @@ package rental
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -32,10 +33,11 @@ type AutoAcceptRule struct {
 
 // RentalRequest represents an incoming request from a user for a resource.
 type RentalRequest struct {
-	UserDID         string
-	UserScore       int
-	ResourceType    string
-	Amount          int64
+	RequestID        string // optional; generated from timestamp when empty
+	UserDID          string
+	UserScore        int
+	ResourceType     string
+	Amount           int64
 	HasPaymentEscrow bool
 }
 
@@ -109,8 +111,16 @@ func (e *AutoAcceptEngine) LoadRules(ctx context.Context) error {
 
 // EvaluateRequest evaluates a rental request against loaded rules.
 // Returns the decision from the first matching rule, or "pending" if no
-// rule matches.
-func (e *AutoAcceptEngine) EvaluateRequest(req RentalRequest) (Decision, error) {
+// rule matches. Every decision is written to the rental_audit table for
+// compliance review.
+func (e *AutoAcceptEngine) EvaluateRequest(ctx context.Context, req RentalRequest) (Decision, error) {
+	// Ensure every request has a stable identifier for audit tracing.
+	if req.RequestID == "" {
+		req.RequestID = fmt.Sprintf("rr_%d", time.Now().UnixNano())
+	}
+
+	var decision Decision
+
 	for _, rule := range e.rules {
 		if !rule.Enabled {
 			continue
@@ -118,11 +128,13 @@ func (e *AutoAcceptEngine) EvaluateRequest(req RentalRequest) (Decision, error) 
 
 		if matchesRule(req, rule) {
 			if rule.Action == "accept" {
-				return Decision{
+				decision = Decision{
 					Action:  "accept",
 					RuleID:  rule.RuleID,
 					Message: fmt.Sprintf("Auto-accepted by rule %q", rule.RuleName),
-				}, nil
+				}
+				e.writeAudit(ctx, req, decision)
+				return decision, nil
 			}
 
 			if rule.Action == "pending" {
@@ -136,26 +148,50 @@ func (e *AutoAcceptEngine) EvaluateRequest(req RentalRequest) (Decision, error) 
 					default:
 					}
 				}
-				return Decision{
+				decision = Decision{
 					Action:  "pending",
 					RuleID:  rule.RuleID,
 					Message: "Requires operator approval",
-				}, nil
+				}
+				e.writeAudit(ctx, req, decision)
+				return decision, nil
 			}
 
-			return Decision{
+			decision = Decision{
 				Action:  "reject",
 				RuleID:  rule.RuleID,
 				Message: fmt.Sprintf("Rejected by rule %q", rule.RuleName),
-			}, nil
+			}
+			e.writeAudit(ctx, req, decision)
+			return decision, nil
 		}
 	}
 
-	// No rule matched — default to require approval
-	return Decision{
+	// No rule matched — default to require approval.
+	decision = Decision{
 		Action:  "pending",
 		Message: "No matching rule - requires manual review",
-	}, nil
+	}
+	e.writeAudit(ctx, req, decision)
+	return decision, nil
+}
+
+// writeAudit persists a rental engine decision to the audit log.
+func (e *AutoAcceptEngine) writeAudit(ctx context.Context, req RentalRequest, d Decision) {
+	if e.store == nil {
+		return
+	}
+	row := &store.RentalAuditRow{
+		RequestID: req.RequestID,
+		UserDID:   req.UserDID,
+		RuleID:    d.RuleID,
+		Action:    d.Action,
+		Reason:    d.Message,
+		DecidedAt: time.Now(),
+	}
+	if err := e.store.InsertRentalAudit(ctx, row); err != nil {
+		log.Printf("[rental] failed to write audit for request %s: %v", req.RequestID, err)
+	}
 }
 
 // AddRule persists a new auto-accept rule.

@@ -26,6 +26,7 @@ type FederationNodeRow struct {
 	FailureRate       float64
 	Status            string
 	LastHeartbeat     time.Time
+	PublicKey         string // base64-encoded Ed25519 public key (32 bytes)
 }
 
 // GetOnlineNodes returns all federation nodes with status "online".
@@ -37,7 +38,7 @@ func (s *Store) GetOnlineNodes(ctx context.Context) ([]FederationNodeRow, error)
 			   total_disk_gb, available_disk_gb,
 			   gpu_model, price_per_cpu_hour,
 			   reputation_score, uptime_percent, failure_rate,
-			   status, last_heartbeat
+			   status, last_heartbeat, public_key
 		FROM federation_nodes WHERE status = 'online'`)
 	if err != nil {
 		return nil, err
@@ -54,7 +55,7 @@ func (s *Store) GetOnlineNodes(ctx context.Context) ([]FederationNodeRow, error)
 			&n.TotalDiskGB, &n.AvailableDiskGB,
 			&n.GPUModel, &n.PricePerCPUHour,
 			&n.ReputationScore, &n.UptimePercent, &n.FailureRate,
-			&n.Status, &n.LastHeartbeat,
+			&n.Status, &n.LastHeartbeat, &n.PublicKey,
 		)
 		if err != nil {
 			return nil, err
@@ -74,8 +75,8 @@ func (s *Store) UpsertFederationNode(ctx context.Context, n *FederationNodeRow) 
 			total_disk_gb, available_disk_gb,
 			gpu_model, price_per_cpu_hour,
 			reputation_score, uptime_percent, failure_rate,
-			status, last_heartbeat
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			status, last_heartbeat, public_key
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(node_did) DO UPDATE SET
 			address=excluded.address,
 			region=excluded.region,
@@ -91,14 +92,15 @@ func (s *Store) UpsertFederationNode(ctx context.Context, n *FederationNodeRow) 
 			uptime_percent=excluded.uptime_percent,
 			failure_rate=excluded.failure_rate,
 			status=excluded.status,
-			last_heartbeat=excluded.last_heartbeat`,
+			last_heartbeat=excluded.last_heartbeat,
+			public_key=excluded.public_key`,
 		n.NodeDID, n.Address, n.Region,
 		n.TotalCPU, n.AvailableCPU,
 		n.TotalMemoryMB, n.AvailableMemoryMB,
 		n.TotalDiskGB, n.AvailableDiskGB,
 		n.GPUModel, n.PricePerCPUHour,
 		n.ReputationScore, n.UptimePercent, n.FailureRate,
-		n.Status, n.LastHeartbeat,
+		n.Status, n.LastHeartbeat, n.PublicKey,
 	)
 	return err
 }

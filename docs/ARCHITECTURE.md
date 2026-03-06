@@ -770,3 +770,107 @@ SoHoLINK installs it onto the NTARI OS node when deployed. Bridge files:
 **Source:** `ui/globe-interface/ntarios-globe.html`
 **Bridge:** `ui/globe-interface/ntari-globe-bridge.sh`
 **Service:** `ntari-os-services/ntari-globe-bridge.initd`
+
+---
+
+## Buyer-Side Marketplace Architecture
+
+> **Shipped:** 2026-03-05 — full requester flow wired end-to-end.
+
+The marketplace adds a **buyer (requester) tier** to the platform. Providers list compute resources
+via federation heartbeats; requesters browse, estimate cost, pre-fund a wallet, and submit
+workloads — all through the REST API or the Flutter mobile app.
+
+### Data Flow
+
+```
+Requester (Flutter app or curl)
+  │
+  ├── GET /api/marketplace/nodes?min_cpu=2&region=us-east-1
+  │     └── FedScheduler.FindNodes(NodeQuery) → NodeDiscovery → federation_nodes table
+  │         Returns: [{node_did, region, available_cpu, price_per_cpu_hour_sats, ...}]
+  │
+  ├── POST /api/marketplace/estimate {cpu_cores:2, memory_mb:2048, disk_gb:10, duration_hours:4}
+  │     └── computeEstimate() — static rates + 1% platform fee
+  │         Returns: {cpu_cost_sats, memory_cost_sats, disk_cost_sats, platform_fee_sats, total_sats, total_usd}
+  │
+  ├── POST /api/wallet/topup {amount_sats:10000, processor:"lightning"}
+  │     └── Ledger.TopupWallet() → payment processor → Lightning invoice
+  │         Returns: {topup_id, invoice, status:"awaiting_payment"}
+  │     └── (user pays Lightning invoice)
+  │     └── POST /api/wallet/confirm-topup → Ledger.ConfirmTopup() → CreditWallet()
+  │
+  └── POST /api/marketplace/purchase {cpu_cores:2, memory_mb:2048, ...}
+        ├── Ledger.DebitWallet(requesterDID, totalSats) — atomic; 402 if insufficient
+        ├── Scheduler.SubmitWorkload(Workload{...})
+        ├── Store.CreateOrder(OrderRow{status:"pending"})
+        └── Returns: {order_id, workload_id, charged_sats}
+```
+
+### Wallet Model
+
+Requesters hold a **prepaid satoshi balance** in `wallet_balances` (SQLite, indexed by DID).
+This avoids per-purchase invoice friction while remaining crypto-native.
+
+```
+wallet_balances: did (PK), balance_sats, updated_at
+wallet_topups:   topup_id (PK), did, amount_sats, processor, invoice,
+                 status [awaiting_payment|confirmed|expired|failed], confirmed_at
+```
+
+Topup flow:
+1. `POST /api/wallet/topup` → `Ledger.TopupWallet()` → creates Lightning hold invoice or Stripe payment intent → saves `WalletTopupRow{status:"awaiting_payment"}`
+2. User pays external to the API (Lightning wallet or Stripe checkout)
+3. Webhook / `POST /api/wallet/confirm-topup` → `Ledger.ConfirmTopup()` → `Store.CreditWallet()`
+
+Debit is **atomic**: `DebitWallet` checks balance ≥ amount inside a SQLite transaction before
+subtracting. Workload submission and order creation happen after a successful debit. If workload
+submission fails, the debit is not rolled back — the operator must cancel the order to trigger
+a proportional refund.
+
+### Order Lifecycle
+
+```
+Order status transitions:
+
+  pending ──► running ──► completed
+     │                       │
+     └──► cancelled ◄─────── │  (via POST /api/orders/{id}/cancel)
+     │
+     └──► failed
+```
+
+Cancel/refund logic:
+```go
+elapsed    := time.Since(order.CreatedAt)
+totalDur   := time.Duration(order.DurationHours) * time.Hour
+unusedFrac := 1.0 - elapsed.Seconds() / totalDur.Seconds()  // clamped 0–1
+refund     := int64(float64(order.ChargedSats) * unusedFrac)
+```
+The scheduler workload is deleted, the refund is credited to the wallet, and order status
+becomes `"cancelled"`.
+
+### Pricing Constants (v0.1.x defaults)
+
+| Resource | Rate |
+|----------|------|
+| vCPU | 100 sats / core / hour |
+| RAM | 10 sats / GB / hour |
+| Disk | 1 sat / GB / hour |
+| Platform fee | 1% of subtotal |
+
+These constants live in `internal/httpapi/marketplace.go` and can be made configurable in a
+future release.
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `internal/httpapi/marketplace.go` | 8 marketplace handlers |
+| `internal/httpapi/wallet.go` | 4 wallet handlers |
+| `internal/store/marketplace.go` | `WalletBalanceRow`, `WalletTopupRow`, `OrderRow` CRUD |
+| `internal/payment/ledger.go` | `GetWalletBalance`, `TopupWallet`, `ConfirmTopup`, `DebitWallet` |
+| `internal/orchestration/scheduler.go` | `FindNodes(ctx, NodeQuery)` |
+| `mobile/flutter-app/lib/pages/marketplace_page.dart` | Browse + filter provider nodes |
+| `mobile/flutter-app/lib/pages/order_page.dart` | Configure, estimate, pay, launch |
+| `mobile/flutter-app/lib/models/marketplace.dart` | `MarketplaceNode`, `CostEstimate`, `WalletBalance`, `Order` |

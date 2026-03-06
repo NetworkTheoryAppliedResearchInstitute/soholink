@@ -447,6 +447,23 @@ CREATE TABLE IF NOT EXISTS blockchain_batches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_blockchain_batches_hash ON blockchain_batches(hash);
+
+-- Device tokens: Flutter / mobile sessions authenticated with owner Ed25519 key.
+CREATE TABLE IF NOT EXISTS device_tokens (
+	token_hash  TEXT     PRIMARY KEY,      -- SHA-256(raw_token) as hex
+	device_name TEXT     NOT NULL DEFAULT 'unknown',
+	created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+	last_seen   DATETIME DEFAULT CURRENT_TIMESTAMP,
+	revoked     INTEGER  NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_tokens_revoked ON device_tokens(revoked);
+
+-- Schema versioning: track which migrations have been applied.
+CREATE TABLE IF NOT EXISTS schema_version (
+	version    INTEGER NOT NULL,
+	applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 // NewStore opens or creates a SQLite database at the given path and runs migrations.
@@ -462,10 +479,26 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Enable WAL mode for better concurrent read performance
+	// SQLite: single-writer required — cap the connection pool to 1.
+	// This prevents "database is locked" SQLITE_BUSY errors under concurrent
+	// goroutine access.  Reads through the same connection are still fast
+	// because WAL mode allows concurrent readers to proceed without blocking.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // keep the connection open indefinitely
+
+	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to enable WAL mode: %w", err)
+	}
+
+	// Set a busy timeout so that writers retry for up to 5 s before returning
+	// SQLITE_BUSY.  This provides a last-resort safety net if SetMaxOpenConns(1)
+	// is ever bypassed (e.g. via the raw DB() accessor).
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to set busy_timeout: %w", err)
 	}
 
 	// Enable foreign keys
@@ -474,13 +507,21 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
-	// Run schema migrations
+	// Apply base schema (all CREATE TABLE IF NOT EXISTS — idempotent).
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to run schema migration: %w", err)
 	}
 
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+
+	// Apply versioned migrations on top of the base schema.
+	if err := s.runMigrations(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	return s, nil
 }
 
 // NewMemoryStore creates an in-memory SQLite store for testing.

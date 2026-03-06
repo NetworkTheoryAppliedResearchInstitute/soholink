@@ -1,35 +1,71 @@
 package httpapi
 
-// Metrics defines Prometheus metric names for resource sharing subsystems.
-// These are registered with the Prometheus client when the metrics endpoint is enabled.
-//
-// Resource usage metrics:
-//   compute_jobs_total          (counter, labels: status, provider)
-//   compute_queue_size          (gauge)
-//   compute_cpu_seconds_total   (counter, labels: provider)
-//   storage_uploads_total       (counter, labels: mime_type, scanner_result)
-//   storage_bytes_stored        (gauge)
-//   storage_malware_blocked     (counter)
-//   print_jobs_total            (counter, labels: printer_type, status)
-//   print_filament_grams_total  (counter, labels: printer_type)
-//   portal_sessions_active      (gauge)
-//   portal_auth_failures_total  (counter, labels: reason)
-//   portal_bandwidth_bytes      (counter, labels: direction)
-//
-// Payment metrics:
-//   payments_pending            (gauge)
-//   payments_settled_total      (counter, labels: processor, currency)
-//   payments_failed_total       (counter, labels: processor, reason)
-//
-// LBTAS metrics:
-//   lbtas_ratings_total         (counter, labels: resource_type, rater_role)
-//   lbtas_disputes_total        (counter)
-//   lbtas_auto_resolved_total   (counter)
-//
-// HTTP API metrics:
-//   http_requests_total         (counter, labels: method, path, status)
-//   http_request_duration_seconds (histogram, labels: method, path)
-//   http_active_requests        (gauge)
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+// ---------------------------------------------------------------------------
+// Live Prometheus counters (registered at init via promauto)
+// ---------------------------------------------------------------------------
+
+// httpRequestsTotal counts every HTTP request handled by the API server,
+// labelled by HTTP method, URL path, and response status code.
+// NOTE: r.URL.Path is used as-is; paths containing resource IDs (e.g.
+// /api/lbtas/score/did:key:...) produce high-cardinality labels.
+// Normalise or truncate such paths before a high-traffic production deployment.
+var httpRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "soholink_http_requests_total",
+	Help: "Total HTTP requests handled by the API server, by method, path, and status code.",
+}, []string{"method", "path", "status"})
+
+// walletTopupTotal counts successfully initiated wallet topup requests.
+// A topup is counted when the ledger returns a payment invoice without error;
+// it does NOT indicate that the payment was completed.
+var walletTopupTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "soholink_wallet_topup_total",
+	Help: "Total wallet topup requests successfully initiated.",
+})
+
+// workloadPurchaseTotal counts workload purchase attempts, labelled by result:
+// "success", "manifest_rejected", "policy_denied", "payment_failed".
+var workloadPurchaseTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "soholink_workload_purchase_total",
+	Help: "Workload purchase attempts by result label.",
+}, []string{"result"})
+
+// ---------------------------------------------------------------------------
+// HTTP status-recording middleware
+// ---------------------------------------------------------------------------
+
+// statusRecorder is a minimal http.ResponseWriter wrapper that captures the
+// HTTP status code written by the downstream handler, used by metricsMiddleware.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
+}
+
+// metricsMiddleware wraps next and increments httpRequestsTotal for every
+// request after the downstream handler returns.
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(rw.status)).Inc()
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Metric name catalogue (kept for reference / dashboard generation)
+// ---------------------------------------------------------------------------
 
 // MetricNames holds the full set of metric names used by the system.
 var MetricNames = struct {
@@ -53,6 +89,8 @@ var MetricNames = struct {
 	HTTPRequestsTotal       string
 	HTTPRequestDuration     string
 	HTTPActiveRequests      string
+	WalletTopupTotal        string
+	WorkloadPurchaseTotal   string
 }{
 	ComputeJobsTotal:        "compute_jobs_total",
 	ComputeQueueSize:        "compute_queue_size",
@@ -71,7 +109,9 @@ var MetricNames = struct {
 	LBTASRatingsTotal:       "lbtas_ratings_total",
 	LBTASDisputesTotal:      "lbtas_disputes_total",
 	LBTASAutoResolvedTotal:  "lbtas_auto_resolved_total",
-	HTTPRequestsTotal:       "http_requests_total",
+	HTTPRequestsTotal:       "soholink_http_requests_total",
 	HTTPRequestDuration:     "http_request_duration_seconds",
 	HTTPActiveRequests:      "http_active_requests",
+	WalletTopupTotal:        "soholink_wallet_topup_total",
+	WorkloadPurchaseTotal:   "soholink_workload_purchase_total",
 }

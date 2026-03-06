@@ -3,6 +3,8 @@ package orchestration
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 )
 
 // ListWorkloads returns all active workload states.
@@ -39,14 +41,40 @@ func (s *FedScheduler) DeleteWorkload(ctx context.Context, workloadID string) er
 }
 
 // UpdateWorkload applies configuration updates to a workload.
+//
+// Supported keys in updates:
+//   - "replicas" (int or float64)  — triggers a ScaleWorkload call
+//   - "cpu_cores" (float64)        — updates the spec for future placements
+//   - "memory_mb" (float64/int64)  — updates the spec for future placements
 func (s *FedScheduler) UpdateWorkload(ctx context.Context, workloadID string, updates map[string]interface{}) error {
-	s.mu.RLock()
-	_, ok := s.ActiveWorkloads[workloadID]
-	s.mu.RUnlock()
+	// Handle replica scaling first (uses scalingLoop, needs RLock only for check).
+	if v, ok := updates["replicas"]; ok {
+		var n int
+		switch rv := v.(type) {
+		case int:
+			n = rv
+		case float64:
+			n = int(rv)
+		default:
+			return fmt.Errorf("replicas must be a number, got %T", v)
+		}
+		return s.ScaleWorkload(ctx, workloadID, n)
+	}
+
+	// In-place spec updates (affect future placements; running ones are unaffected).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.ActiveWorkloads[workloadID]
 	if !ok {
 		return fmt.Errorf("workload %s not found", workloadID)
 	}
-	// TODO: apply updates to workload spec
+	if cpu, ok := updates["cpu_cores"].(float64); ok {
+		state.Workload.Spec.CPUCores = cpu
+	}
+	if mem, ok := updates["memory_mb"].(float64); ok {
+		state.Workload.Spec.MemoryMB = int64(mem)
+	}
+	state.Workload.UpdatedAt = time.Now().UTC()
 	return nil
 }
 
@@ -66,16 +94,26 @@ func (s *FedScheduler) RestartWorkload(ctx context.Context, workloadID string) e
 	return nil
 }
 
-// GetWorkloadLogs returns recent log lines for a workload.
-// Currently returns a stub message; real implementation requires node agent integration.
+// GetWorkloadLogs returns placement topology for a workload so operators know
+// which node agents to contact for real logs.
+// Direct log streaming requires installing a node agent on each provider node.
 func (s *FedScheduler) GetWorkloadLogs(ctx context.Context, workloadID string, tailLines int, follow bool) (string, error) {
 	s.mu.RLock()
-	_, ok := s.ActiveWorkloads[workloadID]
+	state, ok := s.ActiveWorkloads[workloadID]
 	s.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("workload %s not found", workloadID)
 	}
-	return fmt.Sprintf("[%s] Log collection requires node agent integration\n", workloadID), nil
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Workload %s  status=%s\n", workloadID, state.Workload.Status)
+	fmt.Fprintf(&sb, "Replicas: %d\n\n", len(state.Placements))
+	for i, p := range state.Placements {
+		fmt.Fprintf(&sb, "  [%d] node=%s  address=%s  status=%s  started=%s\n",
+			i+1, p.NodeDID, p.NodeAddress, p.Status, p.StartedAt.Format(time.RFC3339))
+	}
+	fmt.Fprintf(&sb, "\nTo retrieve container/VM logs, connect to each node's agent address above.\n")
+	return sb.String(), nil
 }
 
 // GetWorkloadMetrics returns metrics for a workload.

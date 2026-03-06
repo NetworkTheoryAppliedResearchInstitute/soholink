@@ -1,0 +1,854 @@
+openapi: "3.1.0"
+
+info:
+  title: SoHoLINK Node API
+  version: "0.1.0"
+  x-stability: beta
+  description: |
+    REST API for the SoHoLINK federated compute marketplace.
+
+    **Authentication:** All endpoints except those marked *public* require a device token
+    in the `Authorization` header:
+    ```
+    Authorization: Bearer <64-char-hex-device-token>
+    ```
+    Obtain a token via the challenge/verify flow (`GET /api/auth/challenge` →
+    `POST /api/auth/verify`).
+
+    **Base URL:** `https://<node-host>:8080`
+  contact:
+    name: SoHoLINK Support
+    email: hello@soholink.network
+  license:
+    name: Proprietary
+    url: https://github.com/NetworkTheoryAppliedResearchInstitute/soholink
+
+servers:
+  - url: https://{host}:8080
+    description: SoHoLINK node (production — TLS required)
+    variables:
+      host:
+        default: localhost
+        description: Node hostname or IP address
+  - url: http://{host}:8080
+    description: SoHoLINK node (development — no TLS)
+    variables:
+      host:
+        default: localhost
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: hex
+      description: 64-character hex device token obtained from POST /api/auth/verify
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: "Invalid request body"
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        time:
+          type: string
+          format: date-time
+
+    AuthChallenge:
+      type: object
+      properties:
+        challenge:
+          type: string
+          description: Random hex nonce to be signed by the client
+        expires_at:
+          type: string
+          format: date-time
+
+    AuthVerifyRequest:
+      type: object
+      required: [did, challenge, signature]
+      properties:
+        did:
+          type: string
+          description: "did:key:... DID of the authenticating device"
+          example: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        challenge:
+          type: string
+          description: Challenge nonce from GET /api/auth/challenge
+        signature:
+          type: string
+          description: Hex-encoded Ed25519 signature over the challenge
+
+    AuthVerifyResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: 64-char hex device token (valid for credential_ttl seconds)
+        expires_at:
+          type: string
+          format: date-time
+
+    WalletBalance:
+      type: object
+      properties:
+        did:
+          type: string
+        balance_sats:
+          type: integer
+          format: int64
+        updated_at:
+          type: string
+          format: date-time
+
+    WalletTopupRequest:
+      type: object
+      required: [amount_sats, processor]
+      properties:
+        amount_sats:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount to top up in satoshis
+        processor:
+          type: string
+          enum: [lightning, stripe]
+          default: lightning
+        idempotency_key:
+          type: string
+          description: >
+            Optional client-generated key for deduplication.
+            If a topup with this key already exists, the existing topup is returned.
+          maxLength: 128
+
+    WalletTopupResponse:
+      type: object
+      properties:
+        topup_id:
+          type: string
+        invoice:
+          type: string
+          description: Lightning invoice string or Stripe payment intent client_secret
+        amount_sats:
+          type: integer
+          format: int64
+        processor:
+          type: string
+        status:
+          type: string
+          enum: [awaiting_payment, confirmed, failed]
+        instructions:
+          type: string
+
+    WalletTopupRow:
+      type: object
+      properties:
+        topup_id:
+          type: string
+        did:
+          type: string
+        processor:
+          type: string
+        amount_sats:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [awaiting_payment, confirmed, failed]
+        created_at:
+          type: string
+          format: date-time
+        confirmed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    PurchaseRequest:
+      type: object
+      required: [cpu_cores, duration_hours]
+      properties:
+        cpu_cores:
+          type: number
+          minimum: 0.1
+        memory_mb:
+          type: integer
+          minimum: 64
+        disk_gb:
+          type: integer
+          minimum: 0
+        duration_hours:
+          type: number
+          minimum: 0.1
+          default: 1
+        replicas:
+          type: integer
+          minimum: 1
+          default: 1
+        image:
+          type: string
+          description: OCI container image reference
+        description:
+          type: string
+          maxLength: 256
+        constraints:
+          type: object
+          description: Scheduler placement constraints (region, gpu_required, etc.)
+          additionalProperties: true
+        manifest:
+          $ref: "#/components/schemas/WorkloadManifest"
+
+    WorkloadManifest:
+      type: object
+      required: [workload_type, declared_purpose]
+      properties:
+        workload_type:
+          type: string
+          enum: [compute, storage, inference, transcoding, build]
+        declared_purpose:
+          type: string
+          maxLength: 512
+        network_egress:
+          type: boolean
+          default: false
+          description: Whether the workload requires outbound internet access
+        data_classification:
+          type: string
+          enum: [public, internal, confidential]
+          default: internal
+
+    PurchaseResponse:
+      type: object
+      properties:
+        order_id:
+          type: string
+        workload_id:
+          type: string
+        charged_sats:
+          type: integer
+          format: int64
+        estimated_completion:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+
+    Order:
+      type: object
+      properties:
+        order_id:
+          type: string
+        requester_did:
+          type: string
+        order_type:
+          type: string
+        resource_ref_id:
+          type: string
+        description:
+          type: string
+        cpu_cores:
+          type: number
+        memory_mb:
+          type: integer
+        disk_gb:
+          type: integer
+        duration_hours:
+          type: number
+        charged_sats:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [pending, running, completed, cancelled, failed]
+        created_at:
+          type: string
+          format: date-time
+
+    StorageUploadResponse:
+      type: object
+      properties:
+        cid:
+          type: string
+          description: IPFS content identifier (SHA-256 CID)
+        size_bytes:
+          type: integer
+          format: int64
+        stored_at:
+          type: string
+          format: date-time
+
+    Workload:
+      type: object
+      properties:
+        workload_id:
+          type: string
+        owner_did:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        replicas:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    User:
+      type: object
+      properties:
+        did:
+          type: string
+        role:
+          type: string
+          enum: [admin, provider, requester]
+        created_at:
+          type: string
+          format: date-time
+
+    StripeWebhookEvent:
+      type: object
+      description: >
+        Raw Stripe event body. The server verifies the `Stripe-Signature` header
+        using HMAC-SHA256 before processing the event.
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          example: "payment_intent.succeeded"
+        data:
+          type: object
+
+paths:
+  # ── Health ──────────────────────────────────────────────────────────────────
+
+  /api/health:
+    get:
+      summary: Node health check
+      operationId: getHealth
+      security: []
+      tags: [Health]
+      responses:
+        "200":
+          description: Node is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: getMetrics
+      security: []
+      tags: [Health]
+      description: Returns Prometheus text-format metrics for scraping.
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ── Authentication ───────────────────────────────────────────────────────────
+
+  /api/auth/challenge:
+    get:
+      summary: Get authentication challenge
+      operationId: getAuthChallenge
+      security: []
+      tags: [Auth]
+      description: >
+        Returns a random nonce that the client must sign with their Ed25519 private key.
+        Rate-limited to 10 requests per minute per IP.
+      responses:
+        "200":
+          description: Challenge nonce
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthChallenge"
+        "429":
+          description: Too many requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/verify:
+    post:
+      summary: Verify challenge signature and obtain token
+      operationId: verifyAuthChallenge
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthVerifyRequest"
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthVerifyResponse"
+        "401":
+          description: Invalid signature or expired challenge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Wallet ───────────────────────────────────────────────────────────────────
+
+  /api/wallet/balance:
+    get:
+      summary: Get wallet balance
+      operationId: getWalletBalance
+      tags: [Wallet]
+      responses:
+        "200":
+          description: Current wallet balance in satoshis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletBalance"
+
+  /api/wallet/topup:
+    post:
+      summary: Initiate a wallet top-up
+      operationId: createWalletTopup
+      tags: [Wallet]
+      description: >
+        Creates a Lightning invoice or Stripe payment intent.
+        The wallet balance is credited only after payment is confirmed
+        (via `POST /api/wallet/confirm-topup` or the Stripe webhook).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletTopupRequest"
+      responses:
+        "201":
+          description: Topup request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletTopupResponse"
+        "503":
+          description: Payment system not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/wallet/topups:
+    get:
+      summary: List wallet top-up history
+      operationId: listWalletTopups
+      tags: [Wallet]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Paginated list of topup records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WalletTopupRow"
+                  total:
+                    type: integer
+
+  /api/wallet/confirm-topup:
+    post:
+      summary: Manually confirm a pending top-up (Lightning)
+      operationId: confirmWalletTopup
+      tags: [Wallet]
+      description: Marks an awaiting_payment topup as confirmed and credits the wallet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topup_id]
+              properties:
+                topup_id:
+                  type: string
+      responses:
+        "200":
+          description: Topup confirmed and wallet credited
+        "404":
+          description: Topup not found
+
+  # ── Marketplace ───────────────────────────────────────────────────────────────
+
+  /api/marketplace/purchase:
+    post:
+      summary: Purchase compute time
+      operationId: purchaseWorkload
+      tags: [Marketplace]
+      description: >
+        Debits the wallet by the estimated cost, validates the workload manifest
+        against safety policies, and submits the workload to the federated scheduler.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseRequest"
+      responses:
+        "201":
+          description: Workload purchase accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseResponse"
+        "400":
+          description: Invalid manifest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  validation_errors:
+                    type: array
+                    items:
+                      type: string
+        "402":
+          description: Insufficient wallet balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  needed_sats:
+                    type: integer
+                    format: int64
+        "422":
+          description: Workload rejected by safety policy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  deny_reasons:
+                    type: array
+                    items:
+                      type: string
+
+  /api/orders:
+    get:
+      summary: List orders
+      operationId: listOrders
+      tags: [Marketplace]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Order"
+
+  /api/orders/{id}:
+    get:
+      summary: Get order by ID
+      operationId: getOrder
+      tags: [Marketplace]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          description: Order not found
+
+  # ── Storage ───────────────────────────────────────────────────────────────────
+
+  /api/storage/objects/{key}:
+    put:
+      summary: Upload an object
+      operationId: putObject
+      tags: [Storage]
+      description: >
+        Uploads an object to the shared storage pool.
+        Content is screened against the CSAM hash blocklist before acceptance.
+        Maximum object size is 4 MB (enforced by the global request body limit).
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Object stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageUploadResponse"
+        "451":
+          description: Content blocked (CSAM or DMCA)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Retrieve an object
+      operationId: getObject
+      tags: [Storage]
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Object not found
+    delete:
+      summary: Delete an object
+      operationId: deleteObject
+      tags: [Storage]
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Object deleted
+        "404":
+          description: Object not found
+
+  # ── Orchestration ─────────────────────────────────────────────────────────────
+
+  /api/workloads:
+    get:
+      summary: List workloads
+      operationId: listWorkloads
+      tags: [Orchestration]
+      responses:
+        "200":
+          description: List of workloads owned by this node
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workloads:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Workload"
+
+  /api/workloads/{id}:
+    get:
+      summary: Get workload status
+      operationId: getWorkload
+      tags: [Orchestration]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workload details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workload"
+        "404":
+          description: Workload not found
+
+  # ── Admin ─────────────────────────────────────────────────────────────────────
+
+  /api/admin/users:
+    get:
+      summary: List registered users
+      operationId: listUsers
+      tags: [Admin]
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+    post:
+      summary: Create a user
+      operationId: createUser
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [did, role]
+              properties:
+                did:
+                  type: string
+                role:
+                  type: string
+                  enum: [admin, provider, requester]
+      responses:
+        "201":
+          description: User created
+        "409":
+          description: DID already registered
+
+  /api/admin/export:
+    get:
+      summary: Export node data for a DID (GDPR / privacy request)
+      operationId: exportData
+      tags: [Admin]
+      parameters:
+        - name: did
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: JSON export of all data associated with the DID
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ── Webhooks ──────────────────────────────────────────────────────────────────
+
+  /api/webhooks/stripe:
+    post:
+      summary: Stripe webhook receiver
+      operationId: stripeWebhook
+      security: []
+      tags: [Webhooks]
+      description: >
+        Receives Stripe webhook events.  The `Stripe-Signature` header is verified
+        using HMAC-SHA256 before any event is processed.  Stripe retries on non-2xx
+        responses; always return 200 after verifying the signature.
+      parameters:
+        - name: Stripe-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: "Stripe webhook signature header (t=...,v1=...)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StripeWebhookEvent"
+      responses:
+        "200":
+          description: Event accepted
+        "400":
+          description: Invalid signature or malformed payload
+
+tags:
+  - name: Health
+    description: Node health and observability endpoints
+  - name: Auth
+    description: Ed25519 challenge/response authentication
+  - name: Wallet
+    description: Prepaid satoshi wallet (Lightning + Stripe top-up)
+  - name: Marketplace
+    description: Compute purchase and order management
+  - name: Storage
+    description: Content-addressed shared object storage
+  - name: Orchestration
+    description: Federated workload scheduling and status
+  - name: Admin
+    description: Administrative operations (requires admin role)
+  - name: Webhooks
+    description: Inbound webhooks from payment processors

@@ -3,9 +3,13 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/payment"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
 // handleGetBalance returns the current revenue balance
@@ -139,7 +143,7 @@ func (s *Server) handleGetActiveRentals(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleRequestPayout requests a payout of pending revenue
+// handleRequestPayout requests a payout of pending revenue.
 // POST /api/revenue/request-payout
 func (s *Server) handleRequestPayout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -148,9 +152,9 @@ func (s *Server) handleRequestPayout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Amount        float64 `json:"amount"`
-		PaymentMethod string  `json:"payment_method"`
-		Address       string  `json:"address"`
+		Amount        float64 `json:"amount"`         // satoshis
+		PaymentMethod string  `json:"payment_method"` // "lightning", "stripe", "barter"
+		Address       string  `json:"address"`        // Lightning invoice / bank ref
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -168,48 +172,109 @@ func (s *Server) handleRequestPayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check pending balance
+	// Resolve the provider's node DID from node_info.
+	providerDID, _ := s.store.GetNodeInfo(r.Context(), "owner_did")
+	if providerDID == "" {
+		providerDID = "unknown"
+	}
+
+	// Check pending balance (unsettled producer_payout in central_revenue).
 	pending, err := s.store.GetPendingPayout(r.Context())
 	if err != nil {
 		http.Error(w, "Failed to check balance", http.StatusInternalServerError)
 		return
 	}
 
-	if req.Amount > float64(pending) {
-		http.Error(w, "Insufficient pending balance", http.StatusBadRequest)
+	amountSats := int64(req.Amount)
+	if amountSats > pending {
+		// Do not reveal the exact balance in the error response.
+		http.Error(w, "Insufficient balance for this payout", http.StatusBadRequest)
 		return
 	}
 
-	// Create payout request (this would integrate with payment processor)
-	payoutID := fmt.Sprintf("payout-%d", time.Now().Unix())
+	// Dispatch via the payment ledger when available; fall back to a simple
+	// store-recorded request so history works even without a live processor.
+	if s.paymentLedger != nil {
+		result, err := s.paymentLedger.RequestPayout(r.Context(), payment.PayoutRequest{
+			ProviderDID:   providerDID,
+			AmountSats:    amountSats,
+			Processor:     req.PaymentMethod,
+			PayoutAddress: req.Address,
+		})
+		if err != nil {
+			log.Printf("[revenue] RequestPayout error: %v", err)
+			http.Error(w, "Payout request failed", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{ // #nosec G104
+			"payout_id":      result.PayoutID,
+			"amount_sats":    amountSats,
+			"payment_method": req.PaymentMethod,
+			"status":         result.Status,
+			"external_id":    result.ExternalID,
+			"created_at":     time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
 
-	// TODO: Integrate with actual payment processor
-	// For now, just record the request
-
+	// No ledger attached — still record the request directly.
+	payoutID := fmt.Sprintf("po_%d", time.Now().UnixNano())
+	pr := storePayoutRow(providerDID, payoutID, amountSats, req.PaymentMethod)
+	_ = s.store.CreatePayout(r.Context(), &pr)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]interface{}{ // #nosec G104
 		"payout_id":      payoutID,
-		"amount":         req.Amount,
+		"amount_sats":    amountSats,
 		"payment_method": req.PaymentMethod,
 		"status":         "pending",
-		"created_at":     time.Now().Format(time.RFC3339),
+		"created_at":     time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
-// handleGetPayoutHistory returns payout history
-// GET /api/revenue/payouts
+// storePayoutRow builds a store.PayoutRow value for direct insertion.
+func storePayoutRow(providerDID, payoutID string, amountSats int64, processor string) store.PayoutRow {
+	return store.PayoutRow{
+		PayoutID:    payoutID,
+		ProviderDID: providerDID,
+		AmountSats:  amountSats,
+		Processor:   processor,
+		Status:      "pending",
+		RequestedAt: time.Now().UTC(),
+	}
+}
+
+// handleGetPayoutHistory returns payout history for this node.
+// GET /api/revenue/payouts?limit=N
 func (s *Server) handleGetPayoutHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// TODO: Implement payout history query from database
+	// Cap at 100 to prevent resource exhaustion.
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
 
-	// Placeholder response
+	providerDID, _ := s.store.GetNodeInfo(r.Context(), "owner_did")
+
+	payouts, err := s.store.ListPayouts(r.Context(), providerDID, limit)
+	if err != nil {
+		log.Printf("[revenue] ListPayouts error: %v", err)
+		http.Error(w, "Failed to load payout history", http.StatusInternalServerError)
+		return
+	}
+	if payouts == nil {
+		payouts = []store.PayoutRow{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"payouts": []interface{}{},
-		"count":   0,
+	json.NewEncoder(w).Encode(map[string]interface{}{ // #nosec G104
+		"payouts": payouts,
+		"count":   len(payouts),
 	})
 }

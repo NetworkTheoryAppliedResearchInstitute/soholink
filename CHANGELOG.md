@@ -9,6 +9,170 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Buyer-Side Marketplace & Prepaid Wallet (2026-03-05)
+
+Complete requester (buyer) experience for the federated compute marketplace. Requesters can now
+browse available provider nodes, estimate costs in sats and USD, top up a prepaid wallet via
+Lightning or Stripe, purchase and launch compute workloads, and track/cancel orders — all from
+the REST API and the Flutter mobile app.
+
+**Schema migration v3** (`internal/store/migrate.go`):
+- `wallet_balances (did PK, balance_sats, updated_at)` — prepaid sats per requester DID
+- `wallet_topups (topup_id PK, did, amount_sats, processor, invoice, status, ...)` — Lightning/Stripe topup records with indexed `(did, status)` lookup
+- `orders (order_id PK, requester_did, order_type, resource_ref_id, description, cpu/mem/disk specs, duration_hours, estimated_sats, charged_sats, status, ...)` — order lifecycle records with indexed `(requester_did, status)` lookup
+
+**Store layer** (`internal/store/marketplace.go`):
+- `WalletBalanceRow`, `WalletTopupRow`, `OrderRow` structs
+- `GetWalletBalance`, `CreditWallet`, `DebitWallet` (atomic check-and-subtract)
+- `CreateWalletTopup`, `UpdateTopupStatus`, `ListWalletTopups`
+- `CreateOrder`, `UpdateOrderStatus`, `GetOrder`, `ListOrders`
+
+**Payment ledger extensions** (`internal/payment/ledger.go`):
+- `GetWalletBalance(ctx, did) (int64, error)`
+- `TopupWallet(ctx, did, processor, amountSats) (topupID, invoice, error)` — creates Lightning invoice or Stripe payment intent; records `awaiting_payment` topup row
+- `ConfirmTopup(ctx, topupID) error` — credits wallet on payment confirmation
+- `DebitWallet(ctx, did, amountSats) error` — returns `ErrInsufficientBalance` if funds insufficient
+
+**FedScheduler extension** (`internal/orchestration/scheduler.go`):
+- `FindNodes(ctx, NodeQuery) ([]*Node, error)` — exposes `NodeDiscovery.FindNodes` via the scheduler interface; used by marketplace browse handler
+
+**Wallet HTTP handlers** (`internal/httpapi/wallet.go`) — 4 new protected endpoints:
+- `GET /api/wallet/balance` — returns balance in sats, BTC, and USD (live BTC/USD rate)
+- `POST /api/wallet/topup` — creates Lightning invoice or Stripe payment intent; returns invoice/intent for user to pay
+- `GET /api/wallet/topups` — topup history
+- `POST /api/wallet/confirm-topup` — manual/dev confirmation; credits wallet immediately
+
+**Marketplace HTTP handlers** (`internal/httpapi/marketplace.go`) — 8 new protected endpoints:
+- `GET /api/marketplace/nodes` — browse provider nodes; filters: `min_cpu`, `max_price_sats`, `region`, `gpu`, `min_reputation`
+- `POST /api/marketplace/estimate` — compute cost in sats and USD for given CPU/RAM/disk/duration; pricing: 100 sats/vCPU/hr, 10 sats/GB-RAM/hr, 1 sat/GB-disk/hr, 1% platform fee
+- `GET /api/marketplace/services` — list managed service plans from the service catalog
+- `POST /api/marketplace/purchase` — atomically debits wallet and submits workload to scheduler; returns `{order_id, workload_id, charged_sats}`
+- `POST /api/marketplace/purchase-service` — debits wallet and provisions a managed service instance
+- `GET /api/orders` — list requester's order history (`?limit=N`)
+- `GET /api/orders/{id}` — order detail with live scheduler status
+- `POST /api/orders/{id}/cancel` — cancel active order; refunds proportional unused sats to wallet; returns `{refund_sats, new_balance_sats}`
+
+**Server wiring** (`internal/httpapi/server.go`):
+- Added `catalog *services.Catalog` field and `SetServiceCatalog(*services.Catalog)` setter
+- 11 new routes registered (8 marketplace + 4 wallet endpoints, all `authMiddleware`-protected)
+
+**App wiring** (`internal/app/app.go`):
+- `initManagedServices` now calls `HTTPAPIServer.SetServiceCatalog(a.ServiceCatalog)` after provisioner registration, wiring the managed service catalog to HTTP handlers
+
+**Flutter mobile app** — complete buyer flow across all 3 layers:
+- `lib/models/marketplace.dart` *(new)* — `MarketplaceNode`, `CostEstimate`, `WalletBalance`, `Order` models with `fromJson` factories and `zero` constants
+- `lib/api/soholink_client.dart` *(extended)* — 8 new methods: `getMarketplaceNodes`, `estimateCost`, `purchaseWorkload`, `getWalletBalance`, `topupWallet`, `confirmTopup`, `getOrders`, `cancelOrder`; added `_post` helper
+- `lib/pages/marketplace_page.dart` *(new)* — browse and filter provider nodes: CPU slider, region dropdown, GPU toggle; `_ProviderCard` shows reputation bar, region badge, status dot, resource chips; "Configure" navigates to `OrderPage`
+- `lib/pages/order_page.dart` *(new)* — configure workload: CPU/RAM/disk sliders clamped to node limits, duration chip selector (1h/4h/8h/24h/72h); live cost estimate card (refetches on slider release); wallet balance card (green if sufficient, red if not); "Pay & Launch" button → purchase → order confirmation dialog; "Add Funds" top-up dialog with Lightning invoice display and dev-confirm button
+- `lib/pages/home_page.dart` *(extended)* — 6th "Market" tab added with `storefront_outlined` / `storefront_rounded` icon; `MarketplacePage()` at index 4 in `IndexedStack`
+
+---
+
+### Security — Production-Readiness Gap Remediation (2026-03-05)
+
+Eight production-readiness gaps identified in an internal security and functionality audit
+have been fixed. All changes are backward-compatible; existing databases are automatically
+migrated on startup.
+
+**Gap 1 — Ed25519 Signature Verification on Federation Endpoints**
+- `POST /api/federation/announce`: `public_key` (base64 Ed25519, 32 bytes) and `signature`
+  (base64 Ed25519 over `"{nodeDID}:{address}:{timestamp}"`) are now required; missing or
+  invalid signatures return HTTP 401
+- `POST /api/federation/heartbeat`: signature verified against the public key stored at
+  announce time (canonical message: `"{nodeDID}:{timestamp}"`); nodes with no stored key
+  log a grace-period warning rather than hard-failing
+- Added `verifyAnnounceSignature` and `verifyHeartbeatSignature` helpers in
+  `internal/httpapi/federation.go`; `PublicKey` stored in `federation_nodes` via migration v2
+
+**Gap 2 — Payout System**
+- `POST /api/revenue/request-payout`: generates a `po_{UnixNano}` payout ID, persists a
+  `payouts` row (status=`pending`), then attempts each configured processor in priority order;
+  Stripe and Lightning paths hand off to the payment ledger; barter credits settle immediately
+- `GET /api/revenue/payouts[?limit=N]`: returns real rows from the `payouts` table (previously
+  returned a hard-coded stub)
+- Added `PayoutRow`, `CreatePayout`, `ListPayouts`, `UpdatePayoutStatus` to
+  `internal/store/central.go`
+- Added `PayoutRequest`, `PayoutResult`, `RequestPayout` to `internal/payment/ledger.go`
+- Added `paymentLedger *payment.Ledger` field and `SetPaymentLedger` setter to HTTP API server;
+  wired in `app.go → initResourceSharing`
+
+**Gap 3 — Rate Limiting on Federation Endpoints**
+- `POST /api/federation/announce`: 5 requests/IP/minute (slow/expensive operation)
+- `POST /api/federation/heartbeat`: 10 requests/IP/minute (allows burst above normal 2/min rate)
+- `POST /api/federation/deregister`: 5 requests/IP/minute
+- Uses the existing `ipRateLimiter` sliding-window implementation already protecting mobile endpoints
+
+**Gap 4 — FedScheduler ↔ Usage Meter Wiring**
+- Added `ActivePlacements() []payment.ActivePlacement` to `FedScheduler` (implements
+  `payment.PlacementSource`); only `"running"` placements are billed; method deep-copies
+  under `RLock` to prevent data races
+- `app.go → startResourceSharing` now creates a `payment.UsageMeter` and runs it in a
+  goroutine when both `FedScheduler` and `PaymentLedger` are initialised
+  (`BillingInterval=1h`, `MinBillableSeconds=60`); workloads now actually generate billing events
+
+**Gap 5 — Startup Configuration Validation**
+- New file `internal/app/validate.go`: `(App).validateConfig()` called at the top of `Start()`
+  before any service starts; all checks are non-fatal log warnings to support development workflows
+- Warns on: default RADIUS shared secret (`testing123` or empty); `payment.enabled` without a
+  real processor; Stripe processor with unset `$SECRET_KEY_ENV`; Lightning processor without
+  `lnd_tls_cert_path`; `federation.is_coordinator` without `resource_sharing.enabled`; empty
+  `node.did`; `orchestration.enabled` without `payment.enabled`
+
+**Gap 6 — Schema Migration System**
+- New file `internal/store/migrate.go`: append-only `migrations []string` slice;
+  `runMigrations()` applies un-applied migrations in version order; `schema_version` table
+  tracks applied versions; idempotent on restart
+- `internal/store/db.go`: added `schema_version` table to the base schema constant; `NewStore`
+  calls `s.runMigrations()` immediately after initial schema creation
+- Migration v1: `payouts` table + `idx_payouts_provider` index
+- Migration v2: `ALTER TABLE federation_nodes ADD COLUMN public_key TEXT NOT NULL DEFAULT ''`
+
+**Gap 7 — Workload Update + Honest Log Scaffolding**
+- `FedScheduler.UpdateWorkload`: handles `"replicas"` (delegates to `ScaleWorkload`),
+  `"cpu_cores"` (float64 in-place spec update), and `"memory_mb"` (float64 in-place spec
+  update); updates `Workload.UpdatedAt` on all changes
+- `FedScheduler.GetWorkloadLogs`: returns real placement topology (node DID, address, status,
+  `StartedAt` timestamp) instead of a generic stub; advises operators which node agent
+  addresses to contact for actual container/VM logs
+
+**Gap 8 — LND TLS Certificate Pinning**
+- Added `LNDMacaroonEnv string` and `LNDTLSCertPath string` to `PaymentProcessorEntry` in
+  `internal/config/config.go`
+- `payment.NewLightningProcessor(host, macaroon, tlsCertPath string)`: loads an `x509.CertPool`
+  from the PEM file at `tlsCertPath` when set; always enforces TLS 1.2 minimum; falls back to
+  `InsecureSkipVerify` with a prominent `[lightning] WARNING` log when no cert path is configured
+- `app.go`: reads macaroon from the configured env var at startup; passes `LNDTLSCertPath` to
+  the constructor; startup validator warns when LND host is set without a cert path
+
+---
+
+### Added — Small-World LAN Mesh P2P Discovery (2026-03-04)
+
+**Architecture decision:** LAN peer discovery uses signed multicast UDP (group `239.255.42.99:7946`,
+RFC 2365 administratively-scoped range — will not leave the LAN) rather than mDNS, to remain
+dependency-free and work on all platforms without Bonjour/Avahi installed.
+
+Nodes form a *small-world network* (Watts–Strogatz model): high local clustering coefficient inside
+each LAN workgroup, with sparse cross-subnet long-range links via the HTTP registration API —
+giving the overall federation its characteristic short average path length.
+
+- `internal/p2p/mesh.go`: `Mesh` — multicast UDP peer discovery; `Announcement` struct (Ed25519
+  signed, anti-replay 30 s timestamp window); `Config` and `Peer` types; `Start(ctx)`, `Peers()`,
+  `PeerCount()`, `OnPeer(fn)` API; 10 s announce interval, 45 s peer TTL, 15 s stale reaper;
+  discovered peers auto-upserted into `federation_nodes` via `store.UpsertFederationNode`; stale
+  peers marked `offline` in store
+- `internal/p2p/peers_handler.go`: `(Mesh).HandlePeers(w, r)` HTTP handler for `GET /api/peers`;
+  returns `{"count": N, "peers": [...]}` with `PeerJSON` (DID, api\_addr, ipfs\_addr, cpu\_cores,
+  ram\_gb, disk\_gb, gpu, region, last\_seen)
+- `internal/httpapi/server.go`: added `p2pMesh *p2p.Mesh` field, `SetP2PMesh(*p2p.Mesh)` setter,
+  `GET /api/peers` route delegating to `p2pMesh.HandlePeers`; graceful degradation returns empty
+  list when mesh is not configured
+- `internal/app/app.go`: added `P2PMesh *p2p.Mesh` field to `App`; `initP2P()` extended to load
+  node Ed25519 key and create `p2p.Mesh` when key is present; `Start()` launches mesh goroutine and
+  calls `HTTPAPIServer.SetP2PMesh()`
+- `internal/config/config.go`: added `IPFSAPIAddr string` to `StorageConfig`
+  (`mapstructure:"ipfs_api_addr"`) so nodes can advertise their Kubo API address to LAN peers
+
 ### Added — Local Web Dashboard Phase 1 (2026-03-03)
 
 **Architecture decision:** Dashboard is an embedded local web app served by `fedaaa.exe` at

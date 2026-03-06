@@ -43,6 +43,11 @@ func (m *Manager) ProviderRatesUser(ctx context.Context, req ProviderRatingReque
 		return ErrUnauthorized
 	}
 
+	// Prevent self-review: provider and user must be different identities.
+	if req.ProviderDID == tx.UserDID {
+		return fmt.Errorf("lbtas: cannot rate yourself")
+	}
+
 	if tx.State != StateAwaitingProviderRating {
 		return ErrInvalidState
 	}
@@ -92,6 +97,11 @@ func (m *Manager) UserRatesProvider(ctx context.Context, req UserRatingRequest) 
 
 	if tx.UserDID != req.UserDID {
 		return ErrUnauthorized
+	}
+
+	// Prevent self-review: user and provider must be different identities.
+	if req.UserDID == tx.ProviderDID {
+		return fmt.Errorf("lbtas: cannot rate yourself")
 	}
 
 	if tx.State != StateAwaitingUserRating {
