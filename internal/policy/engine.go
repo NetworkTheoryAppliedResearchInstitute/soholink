@@ -13,20 +13,10 @@ import (
 	"github.com/open-policy-agent/opa/v1/rego"
 )
 
-// embeddedFS is set at startup via SetEmbeddedFS and used as a fallback when
-// no on-disk policy directory is configured.
-var embeddedFS fs.FS
-
-// SetEmbeddedFS registers an fs.FS (typically an embed.FS sub-tree) that the
-// engine will load .rego files from when policyDir is empty or unset.
-// Call this from main() before NewEngine, mirroring the config.SetDefaultConfig pattern.
-func SetEmbeddedFS(fsys fs.FS) {
-	embeddedFS = fsys
-}
-
 // Engine wraps an embedded OPA instance for policy evaluation.
 type Engine struct {
 	policyDir string
+	fallback  fs.FS // used when policyDir is empty; supplied by the caller of NewEngine
 	prepared  rego.PreparedEvalQuery
 	mu        sync.RWMutex
 }
@@ -49,12 +39,22 @@ type AuthzResult struct {
 	DenyReasons []string `json:"deny_reasons,omitempty"`
 }
 
-// NewEngine creates a new OPA policy engine. If policyDir is non-empty, .rego
-// files are loaded from disk. Otherwise the embedded FS registered via
-// SetEmbeddedFS is used, making the binary fully self-contained.
-func NewEngine(policyDir string) (*Engine, error) {
+// NewEngine creates a new OPA policy engine.
+//
+// policyDir — when non-empty, .rego files are loaded from disk.
+//
+// fallback  — when policyDir is empty, .rego files are loaded from this fs.FS
+// (typically fs.Sub of the binary's embedded configs/policies tree).
+// Pass nil only when policyDir is guaranteed to be non-empty at runtime;
+// if both are absent NewEngine returns an error immediately.
+//
+// Supplying fallback as an explicit argument rather than a package-level global
+// makes missing wiring visible at every call site — a nil argument is obvious
+// in code review in a way that a forgotten SetEmbeddedFS() call is not.
+func NewEngine(policyDir string, fallback fs.FS) (*Engine, error) {
 	e := &Engine{
 		policyDir: policyDir,
+		fallback:  fallback,
 	}
 
 	if err := e.load(); err != nil {
@@ -91,9 +91,9 @@ func (e *Engine) load() error {
 		if len(modules) == 1 { // only the query was added
 			return fmt.Errorf("no policy files found in %s", e.policyDir)
 		}
-	} else if embeddedFS != nil {
+	} else if e.fallback != nil {
 		// ── Embedded FS path ─────────────────────────────────────────────────
-		files, err := fs.Glob(embeddedFS, "*.rego")
+		files, err := fs.Glob(e.fallback, "*.rego")
 		if err != nil {
 			return fmt.Errorf("failed to glob embedded policy files: %w", err)
 		}
@@ -102,7 +102,7 @@ func (e *Engine) load() error {
 			if strings.HasSuffix(f, "_test.rego") {
 				continue // skip OPA test helpers
 			}
-			data, err := fs.ReadFile(embeddedFS, f)
+			data, err := fs.ReadFile(e.fallback, f)
 			if err != nil {
 				return fmt.Errorf("failed to read embedded policy file %s: %w", f, err)
 			}
@@ -113,7 +113,7 @@ func (e *Engine) load() error {
 			return fmt.Errorf("no policy files found in embedded FS")
 		}
 	} else {
-		return fmt.Errorf("no policy source configured: set policy.directory or call policy.SetEmbeddedFS")
+		return fmt.Errorf("no policy source configured: policyDir is empty and no fallback fs.FS was provided to NewEngine")
 	}
 
 	// Compile and prepare
@@ -181,8 +181,8 @@ func (e *Engine) PolicyFiles() ([]string, error) {
 		pattern := filepath.Join(e.policyDir, "*.rego")
 		return filepath.Glob(pattern)
 	}
-	if embeddedFS != nil {
-		return fs.Glob(embeddedFS, "*.rego")
+	if e.fallback != nil {
+		return fs.Glob(e.fallback, "*.rego")
 	}
 	return nil, nil
 }

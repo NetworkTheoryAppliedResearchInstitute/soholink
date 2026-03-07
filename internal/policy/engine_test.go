@@ -17,7 +17,9 @@ func setupTestEngine(t *testing.T, policyContent string) *Engine {
 		t.Fatalf("failed to write policy: %v", err)
 	}
 
-	engine, err := NewEngine(dir)
+	// fallback is nil because policyDir is always a real temp dir in unit tests.
+	// The embedded-FS path is exercised separately in embedded_test.go.
+	engine, err := NewEngine(dir, nil)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
 	}
@@ -187,7 +189,7 @@ package soholink.authz
 default allow = false
 `), 0644)
 
-	engine, err := NewEngine(dir)
+	engine, err := NewEngine(dir, nil)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
 	}
@@ -223,7 +225,7 @@ allow if { input.authenticated == true }
 
 func TestEngineNoPolicies(t *testing.T) {
 	dir := t.TempDir()
-	_, err := NewEngine(dir)
+	_, err := NewEngine(dir, nil)
 	if err == nil {
 		t.Error("should fail with no policy files")
 	}

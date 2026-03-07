@@ -11,7 +11,6 @@
 package main
 
 import (
-	"io/fs"
 	"log"
 	"os"
 
@@ -20,7 +19,6 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/cli"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/config"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/gui/dashboard"
-	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/policy"
 )
 
 // Build-time variables set by -ldflags.
@@ -31,16 +29,19 @@ var (
 )
 
 func main() {
-	// Register embedded defaults so config.Load() can seed values.
+	// ── Startup wiring ──────────────────────────────────────────────────────
+	// These calls must run before app.New() is invoked. Each one registers a
+	// package-level resource that a subsystem reads later.  Add a line here
+	// whenever you add a new registration function to any package.
+	//
+	//   config.SetDefaultConfig  → seeds Viper defaults from the embedded YAML
+	//   cli.SetDefaultPolicy     → stores default .rego bytes for `install` cmd
+	//
+	// NOTE: policy.SetEmbeddedFS is intentionally absent here. The embedded
+	// .rego FS is now wired inside app.New() via an explicit argument to
+	// policy.NewEngine, making the dependency visible at every call site.
 	config.SetDefaultConfig(soholink.DefaultConfigYAML)
 	cli.SetDefaultPolicy(soholink.DefaultPolicyRego)
-
-	// Register the embedded .rego policies so the policy engine can start
-	// without an external policy directory — mirrors SetDefaultConfig above.
-	// fs.Sub strips the "configs/policies" prefix so *.rego files are at root.
-	if sub, err := fs.Sub(soholink.PoliciesFS, "configs/policies"); err == nil {
-		policy.SetEmbeddedFS(sub)
-	}
 
 	// If any non-GUI subcommand was requested, delegate to the CLI and exit.
 	// This lets operators run `soholink status` or `soholink start` from the

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 
 	"crypto/ed25519"
 
+	soholink "github.com/NetworkTheoryAppliedResearchInstitute/soholink"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/accounting"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/blockchain"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/cdn"
@@ -130,8 +132,16 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	app.Verifier = verifier.NewVerifier(s, credTTL, maxNonceAge)
 
-	// Initialize policy engine
-	pe, err := policy.NewEngine(cfg.Policy.Directory)
+	// Initialize policy engine.
+	// The embedded .rego files (configs/policies/*.rego) are always available as
+	// a fallback so the binary works without an external policy directory.
+	// fs.Sub strips the "configs/policies" prefix so *.rego files sit at the
+	// root of the sub-FS, matching what fs.Glob(fallback, "*.rego") expects.
+	var policyFallback fs.FS
+	if sub, subErr := fs.Sub(soholink.PoliciesFS, "configs/policies"); subErr == nil {
+		policyFallback = sub
+	}
+	pe, err := policy.NewEngine(cfg.Policy.Directory, policyFallback)
 	if err != nil {
 		s.Close()
 		return nil, fmt.Errorf("failed to initialize policy engine: %w", err)

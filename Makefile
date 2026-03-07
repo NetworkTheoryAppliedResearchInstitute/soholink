@@ -1,6 +1,6 @@
 .PHONY: all build build-cli build-gui build-vendor build-pi build-wizards build-installer-windows \
         build-static-windows fyne-package-windows fyne-package-linux fyne-package-macos \
-        dist dist-release test test-short lint clean install vendor
+        dist dist-release test test-short lint deadcode audit clean install vendor
 
 VERSION ?= 0.1.0
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -60,6 +60,17 @@ test-short:
 
 lint:
 	golangci-lint run ./...
+
+# ── Wiring audit ─────────────────────────────────────────────────────────────
+# deadcode: find exported symbols only reachable from tests (not from any
+#   binary entry point).  These are "register but never wire" candidates.
+#   Requires: go install golang.org/x/tools/cmd/deadcode@latest
+deadcode:
+	go run golang.org/x/tools/cmd/deadcode@latest -test ./...
+
+# audit: run all static wiring checks in one shot (CI convenience target).
+audit: lint deadcode
+	go test ./internal/audit/... -v
 
 clean:
 	rm -rf bin/
@@ -166,7 +177,9 @@ help:
 	@echo "  ── Testing & quality ───────────────────────────────────────────────────"
 	@echo "  make test                             Run all tests with race detector + coverage"
 	@echo "  make test-short                       Run quick tests (no race detector)"
-	@echo "  make lint                             Run golangci-lint"
+	@echo "  make lint                             Run golangci-lint (.golangci.yml)"
+	@echo "  make deadcode                         Find symbols only reachable from tests"
+	@echo "  make audit                            Run lint + deadcode + internal/audit tests"
 	@echo ""
 	@echo "  ── Utilities ───────────────────────────────────────────────────────────"
 	@echo "  make clean                            Remove build artifacts (bin/, coverage)"

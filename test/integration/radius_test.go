@@ -66,8 +66,9 @@ allow if {
 	// Initialize verifier
 	v := verifier.NewVerifier(s, 1*time.Hour, 5*time.Minute)
 
-	// Initialize policy engine
-	pe, err := policy.NewEngine(policyDir)
+	// Initialize policy engine using the test's temp policyDir (nil fallback:
+	// the dir is always populated with test .rego files before this call).
+	pe, err := policy.NewEngine(policyDir, nil)
 	if err != nil {
 		t.Fatalf("NewEngine failed: %v", err)
 	}

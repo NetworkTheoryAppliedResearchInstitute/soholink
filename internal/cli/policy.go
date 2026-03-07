@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/sha3"
 
+	soholink "github.com/NetworkTheoryAppliedResearchInstitute/soholink"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/config"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/policy"
 )
@@ -117,8 +119,13 @@ func runPolicyTest(cmd *cobra.Command, args []string) error {
 		cfg.Storage.BasePath = dataDir
 	}
 
-	// Initialize policy engine
-	engine, err := policy.NewEngine(cfg.Policy.Directory)
+	// Initialize policy engine with embedded policies as fallback so
+	// `soholink policy test` works even when policy.directory is unset.
+	var policyFallback fs.FS
+	if sub, subErr := fs.Sub(soholink.PoliciesFS, "configs/policies"); subErr == nil {
+		policyFallback = sub
+	}
+	engine, err := policy.NewEngine(cfg.Policy.Directory, policyFallback)
 	if err != nil {
 		return fmt.Errorf("failed to initialize policy engine: %w", err)
 	}
