@@ -11,6 +11,7 @@
 package main
 
 import (
+	"io/fs"
 	"log"
 	"os"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/cli"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/config"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/gui/dashboard"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/policy"
 )
 
 // Build-time variables set by -ldflags.
@@ -32,6 +34,13 @@ func main() {
 	// Register embedded defaults so config.Load() can seed values.
 	config.SetDefaultConfig(soholink.DefaultConfigYAML)
 	cli.SetDefaultPolicy(soholink.DefaultPolicyRego)
+
+	// Register the embedded .rego policies so the policy engine can start
+	// without an external policy directory — mirrors SetDefaultConfig above.
+	// fs.Sub strips the "configs/policies" prefix so *.rego files are at root.
+	if sub, err := fs.Sub(soholink.PoliciesFS, "configs/policies"); err == nil {
+		policy.SetEmbeddedFS(sub)
+	}
 
 	// If any non-GUI subcommand was requested, delegate to the CLI and exit.
 	// This lets operators run `soholink status` or `soholink start` from the
