@@ -153,6 +153,11 @@ func buildMenuBar(w fyne.Window, application *app.App) *fyne.MainMenu {
 		fyne.NewMenuItem("About SoHoLINK", func() {
 			showAboutDialog(w)
 		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Check for Updates…", func() {
+			showCheckForUpdatesDialog(w, application)
+		}),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Documentation", func() {
 			u, _ := url.Parse("https://ntari.org/soholink/docs")
 			_ = fyne.CurrentApp().OpenURL(u)
@@ -291,6 +296,16 @@ func buildOverviewTab(w fyne.Window, application *app.App) *container.TabItem {
 		container.NewGridWithColumns(2, walletCard, dataCard),
 		complianceCard,
 	)
+
+	// Show update-available banner when a newer release has been detected.
+	if application != nil && application.Updater != nil {
+		if rel := application.Updater.LatestRelease(); rel != nil {
+			notice := widget.NewLabel("⬆  Update available: " + rel.TagName +
+				" — use Help ▸ Check for Updates to install.")
+			notice.Wrapping = fyne.TextWrapWord
+			content.Add(widget.NewCard("", "", notice))
+		}
+	}
 
 	return container.NewTabItem("Overview", container.NewScroll(container.NewPadded(content)))
 }
@@ -1198,6 +1213,59 @@ func showAboutDialog(w fyne.Window) {
 	d.Show()
 }
 
+// showCheckForUpdatesDialog checks for a newer release and, if found, offers
+// to download and install it.  The download is SHA-256 verified against the
+// official checksums.txt before the binary is replaced.
+func showCheckForUpdatesDialog(w fyne.Window, application *app.App) {
+	if application == nil || application.Updater == nil {
+		dialog.ShowInformation("Auto-Updates Disabled",
+			"Auto-updates are not enabled.\n\nTo enable them, set updates.enabled: true\nin your config file and restart.", w)
+		return
+	}
+
+	prog := dialog.NewProgressInfinite("Checking for Updates", "Contacting update server…", w)
+	prog.Show()
+
+	go func() {
+		rel, err := application.Updater.CheckNow()
+		prog.Hide()
+
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("update check failed: %w", err), w)
+			return
+		}
+		if rel == nil {
+			dialog.ShowInformation("Up to Date",
+				"You are running the latest version of SoHoLINK.", w)
+			return
+		}
+
+		msg := fmt.Sprintf(
+			"Update available: %s\nPublished: %s\n\nThe new binary will be downloaded and verified\n(SHA-256 checksum) before installation.\n\nDownload and install now?",
+			rel.TagName, rel.PublishedAt.Format("2006-01-02"))
+
+		dialog.ShowConfirm("Update Available", msg, func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+			dl := dialog.NewProgressInfinite("Downloading Update", "Downloading "+rel.TagName+"…", w)
+			dl.Show()
+
+			go func() {
+				ctx := context.Background()
+				err := application.Updater.Download(ctx, rel)
+				dl.Hide()
+				if err != nil {
+					dialog.ShowError(fmt.Errorf("download failed: %w", err), w)
+					return
+				}
+				dialog.ShowInformation("Update Ready",
+					"Update installed successfully.\n\nRestart SoHoLINK to apply version "+rel.TagName+".", w)
+			}()
+		}, w)
+	}()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Setup wizard
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1545,6 +1613,7 @@ func wizardInstallPage(w fyne.Window, state *wizardState, cfg *config.Config, s 
 					cfg.Radius.AcctAddress = "0.0.0.0:" + state.AcctPort
 					cfg.Storage.BasePath = state.DataDir
 					cfg.Radius.SharedSecret = state.Secret
+				cfg.Updates.Enabled = state.UpdatesEnabled
 				}
 				return nil
 			}},

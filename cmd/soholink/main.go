@@ -70,6 +70,9 @@ func main() {
 		return
 	}
 
+	// Propagate build-time version info into the app (HTTP API + updater).
+	application.SetVersion(version, commit, buildTime)
+
 	// Everything is ready — open the full dashboard.
 	dashboard.RunDashboard(application)
 }

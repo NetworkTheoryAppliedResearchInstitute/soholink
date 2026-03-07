@@ -34,6 +34,7 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/p2p"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/thinclient"
+	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/updater"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/verifier"
 )
 
@@ -90,6 +91,14 @@ type App struct {
 	SLAMonitor      *sla.Monitor
 	SLARecommender  *sla.Recommender
 	HypervisorMgr   *compute.HypervisorManager
+
+	// Auto-updater (nil when updates.enabled=false)
+	Updater *updater.Updater
+
+	// Build-time version metadata (set via SetVersion after New).
+	Version   string
+	Commit    string
+	BuildTime string
 
 	cancelFunc context.CancelFunc
 }
@@ -203,7 +212,32 @@ func New(cfg *config.Config) (*App, error) {
 		app.initFederation(cfg)
 	}
 
+	// Auto-updater: created here so GUI can inspect LatestRelease() immediately.
+	// The actual polling goroutine is started in Start().
+	// SetVersion() is called from main.go after New() to inject ldflags version.
+	if cfg.Updates.Enabled {
+		app.Updater = updater.New(updater.Config{
+			CheckInterval: cfg.Updates.CheckInterval,
+			ReleaseURL:    cfg.Updates.ReleaseURL,
+		}, "0.1.0-dev") // version placeholder; overwritten by SetVersion()
+	}
+
 	return app, nil
+}
+
+// SetVersion stores the build-time version, commit hash, and build timestamp
+// on the App and propagates them to the HTTP API server and updater.
+// Call this immediately after New(), before RunDashboard or Start().
+func (a *App) SetVersion(version, commit, buildTime string) {
+	a.Version = version
+	a.Commit = commit
+	a.BuildTime = buildTime
+	if a.Updater != nil {
+		a.Updater.SetCurrentVersion(version)
+	}
+	if a.HTTPAPIServer != nil {
+		a.HTTPAPIServer.SetVersionInfo(version, commit, buildTime)
+	}
 }
 
 // initFederation sets up the provider-side federation announcer and, when this
@@ -377,6 +411,11 @@ func (a *App) initResourceSharing(cfg *config.Config) error {
 		apiAddr = "0.0.0.0:8080"
 	}
 	a.HTTPAPIServer = httpapi.NewServer(a.Store, a.LBTASManager, apiAddr)
+
+	// Expose build-time version via GET /api/version.
+	// Version is populated later by SetVersion(); an empty string is safe
+	// (the endpoint always responds with whatever is set at query time).
+	a.HTTPAPIServer.SetVersionInfo(a.Version, a.Commit, a.BuildTime)
 
 	// Wire TLS, CORS, and webhook security settings.
 	a.HTTPAPIServer.SetTLSConfig(cfg.ResourceSharing.TLSCertFile, cfg.ResourceSharing.TLSKeyFile)
@@ -643,6 +682,12 @@ func (a *App) Start() error {
 		go a.FederationAnnouncer.Start(ctx)
 		log.Printf("[app]   Federation: announcer started (coordinator=%s)",
 			a.Config.Federation.CoordinatorURL)
+	}
+
+	// Start auto-updater (polls GitHub releases at the configured interval)
+	if a.Updater != nil {
+		go a.Updater.Start(ctx)
+		log.Printf("[app]   Updater:    enabled (interval=%s)", a.Config.Updates.CheckInterval)
 	}
 
 	log.Printf("[app] SoHoLINK AAA node started")

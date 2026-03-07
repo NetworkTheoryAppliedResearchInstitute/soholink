@@ -101,6 +101,10 @@ type Server struct {
 	tlsKeyFile          string   // path to PEM TLS private key
 	allowedOrigins      []string // CORS allowed origins; nil/empty = wildcard
 	stripeWebhookSecret string   // Stripe webhook signing secret for signature verification
+	// Build-time version metadata (set via SetVersionInfo before Start).
+	version   string
+	commit    string
+	buildTime string
 }
 
 // NewServer creates a new HTTP API server.
@@ -214,8 +218,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// Stripe webhook — public (verified by Stripe-Signature, not device token)
 	mux.HandleFunc("/api/webhooks/stripe", s.handleStripeWebhook)
 
-	// Health and discovery
+	// Health, version, and discovery
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/version", s.handleVersion)
 	mux.HandleFunc("/api/resources/discover", s.handleDiscoverResources)
 	mux.HandleFunc("/api/status", s.handleStatus)
 

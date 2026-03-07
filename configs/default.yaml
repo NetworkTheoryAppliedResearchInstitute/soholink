@@ -145,3 +145,15 @@ hypervisor:
   prefer_backend: "auto"  # "kvm", "hyperv", or "auto"
   sev_default: false       # AMD Secure Encrypted Virtualization
   tpm_default: false       # Trusted Platform Module
+
+# Secure auto-update subsystem
+# ─────────────────────────────────────────────────────────────────────────────
+# When enabled, the node polls the GitHub releases API at check_interval,
+# downloads the new binary for this OS/arch, verifies its SHA-256 checksum
+# against the official checksums.txt, then atomically replaces itself.
+# On Windows, the swap happens on next restart via a helper batch file.
+# Disabled by default; opt in via the Setup Wizard (step 5) or set enabled: true here.
+updates:
+  enabled: false
+  check_interval: "24h"
+  release_url: "https://api.github.com/repos/NetworkTheoryAppliedResearchInstitute/soholink/releases/latest"

@@ -44,6 +44,7 @@ type Config struct {
 	Hypervisor      HypervisorConfig      `mapstructure:"hypervisor"`
 	Blockchain      BlockchainConfig      `mapstructure:"blockchain"`
 	Federation      FederationConfig      `mapstructure:"federation"`
+	Updates         UpdatesConfig         `mapstructure:"updates"`
 }
 
 // BlockchainConfig holds settings for the local blockchain anchoring.
@@ -273,6 +274,15 @@ type HypervisorConfig struct {
 	PreferBackend string `mapstructure:"prefer_backend"` // "kvm", "hyperv", "auto"
 	SEVDefault    bool   `mapstructure:"sev_default"`
 	TPMDefault    bool   `mapstructure:"tpm_default"`
+}
+
+// UpdatesConfig holds settings for the secure auto-update subsystem.
+// When enabled, the node polls the GitHub releases API at CheckInterval,
+// downloads and SHA-256 verifies the new binary, then performs an atomic swap.
+type UpdatesConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	CheckInterval string `mapstructure:"check_interval"` // e.g. "24h"
+	ReleaseURL    string `mapstructure:"release_url"`
 }
 
 // DefaultDataDir returns the platform-specific default data directory.
