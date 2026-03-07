@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 )
 
@@ -140,6 +142,13 @@ type Config struct {
 	// announcements from DIDs in this slice are accepted; all others are
 	// silently dropped.  Leave nil or empty to allow all verified peers.
 	AllowedNodeDIDs []string
+
+	// AllowedCIDRs is an optional source-IP allowlist (T-007).  When non-empty,
+	// multicast packets from IPs outside these CIDR ranges are silently dropped
+	// before signature verification.  RFC 1918 ranges are recommended defaults
+	// for home and small-office deployments.  Leave nil or empty to accept
+	// packets from any source address (not recommended for production).
+	AllowedCIDRs []string
 }
 
 // Mesh manages LAN peer discovery via signed multicast UDP announcements.
@@ -149,6 +158,15 @@ type Mesh struct {
 
 	mu    sync.RWMutex
 	peers map[string]*Peer // keyed by DID
+
+	// allowedNets is the parsed form of cfg.AllowedCIDRs (T-007).
+	// Built once in New() and read-only thereafter.
+	allowedNets []*net.IPNet
+
+	// multicastLimiters is a per-source-IP token-bucket rate limiter map (T-009).
+	// Using sync.Map avoids a global lock on the hot datagram receive path.
+	// Each limiter allows 5 packets/second with a burst of 5.
+	multicastLimiters sync.Map // map[string]*rate.Limiter
 
 	// onPeer is called (under no lock) each time a new or updated peer is seen.
 	onPeer func(*Peer)
@@ -171,9 +189,22 @@ func (m *Mesh) isAllowed(did string) bool {
 // New creates a Mesh with the provided configuration.
 // Call Start to begin announcing and listening.
 func New(cfg Config) *Mesh {
+	// Pre-parse CIDR allowlist so handleDatagram does not allocate on the
+	// hot path.  Malformed entries are logged and skipped.
+	var allowedNets []*net.IPNet
+	for _, cidr := range cfg.AllowedCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			log.Printf("[p2p] invalid AllowedCIDR %q: %v (skipping)", cidr, err)
+			continue
+		}
+		allowedNets = append(allowedNets, ipNet)
+	}
+
 	return &Mesh{
-		cfg:   cfg,
-		peers: make(map[string]*Peer),
+		cfg:         cfg,
+		peers:       make(map[string]*Peer),
+		allowedNets: allowedNets,
 	}
 }
 
@@ -305,6 +336,31 @@ func (m *Mesh) sendAnnouncement(conn *net.UDPConn) {
 }
 
 func (m *Mesh) handleDatagram(_ context.Context, data []byte, src *net.UDPAddr) {
+	// S2-1: CIDR allowlist — drop packets from outside permitted source ranges
+	// before any JSON parsing or signature verification (T-007).
+	if len(m.allowedNets) > 0 {
+		inAllowlist := false
+		for _, n := range m.allowedNets {
+			if n.Contains(src.IP) {
+				inAllowlist = true
+				break
+			}
+		}
+		if !inAllowlist {
+			return // silently drop — do not log to avoid amplifying attacker visibility
+		}
+	}
+
+	// S2-2: Per-source-IP rate limit — drop multicast flood from a single IP
+	// without processing (T-009).  5 packets/second with burst of 5.
+	limiterVal, _ := m.multicastLimiters.LoadOrStore(
+		src.IP.String(),
+		rate.NewLimiter(rate.Every(time.Second), 5),
+	)
+	if !limiterVal.(*rate.Limiter).Allow() {
+		return // silently drop
+	}
+
 	var a Announcement
 	if err := json.Unmarshal(data, &a); err != nil {
 		return // malformed — ignore silently
@@ -319,7 +375,7 @@ func (m *Mesh) handleDatagram(_ context.Context, data []byte, src *net.UDPAddr) 
 		return // future or old protocol version
 	}
 
-	// Allowlist check: drop announcements from peers not in the allowlist.
+	// DID allowlist check: drop announcements from peers not in the allowlist.
 	// Performed before Verify() to avoid wasting CPU on signature verification
 	// for disallowed peers (though the cost difference is minimal).
 	if !m.isAllowed(a.DID) {

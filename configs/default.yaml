@@ -109,6 +109,14 @@ central:
 p2p:
   enabled: false
   listen_addr: "0.0.0.0:9090"
+  # CIDR allowlist for P2P multicast (T-007): only accept peer announcements
+  # from source IPs within these ranges.  The defaults cover all RFC 1918
+  # private address space — suitable for most home and small-office LANs.
+  # To accept peers from any source, remove all entries (not recommended).
+  allowed_cidrs:
+    - "192.168.0.0/16"   # Class B private — most home router subnets
+    - "10.0.0.0/8"       # Class A private — corporate and VPN networks
+    - "172.16.0.0/12"    # Class B private — Docker and container bridges
 
 # Rental management (auto-accept engine)
 rental:

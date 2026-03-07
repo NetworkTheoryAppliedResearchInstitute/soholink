@@ -1,6 +1,6 @@
 # SoHoLINK Security Policy
 
-*Version: 1.0 | Last Updated: 2026-03-06*
+*Version: 1.1 | Last Updated: 2026-03-07*
 
 Network Theory Applied Research Institute takes the security of SoHoLINK seriously. We appreciate the work of security researchers who help us keep our platform safe for everyone.
 
@@ -8,9 +8,9 @@ Network Theory Applied Research Institute takes the security of SoHoLINK serious
 
 ## Reporting a Vulnerability
 
-**Email:** security@soholink.network  
-**PGP Fingerprint:** `XXXX XXXX XXXX XXXX XXXX  XXXX XXXX XXXX XXXX XXXX`  
-*(Full public key available at [keys.openpgp.org](https://keys.openpgp.org) — search for security@soholink.network)*
+**Email:** security@ntari.org
+**PGP Fingerprint:** `XXXX XXXX XXXX XXXX XXXX  XXXX XXXX XXXX XXXX XXXX`
+*(Full public key available at [keys.openpgp.org](https://keys.openpgp.org) — search for security@ntari.org)*
 
 > ⚠️ Please **do not** report security vulnerabilities via GitHub Issues, the public forum, or any other public channel. Use the email above only.
 
@@ -32,8 +32,8 @@ To help us triage quickly, please include:
 
 | Milestone | Target |
 |-----------|--------|
-| Acknowledgement of report | Within **48 hours** |
-| Initial triage and severity assessment | Within **5 business days** |
+| Acknowledgement of report | Within **72 hours** |
+| Initial triage and severity assessment | Within **14 days** |
 | Patch released for Critical severity | Within **14 days** of confirmation |
 | Patch released for High severity | Within **30 days** of confirmation |
 | Patch released for Medium / Low | Next scheduled release |
@@ -119,6 +119,12 @@ For reference, the following security controls are currently in place:
 | Auto-updater HTTPS enforcement | ✅ `release_url` must be `https://`; redirects to non-HTTPS rejected |
 | Auto-updater checksum verification | ✅ SHA-256 vs official `checksums.txt`; `crypto/subtle` constant-time compare |
 | Auto-updater temp file isolation | ✅ `0600` permissions set before binary data written |
+
+---
+
+## Threat Model
+
+SoHoLINK's STRIDE threat model (27 threats across 7 trust boundaries) is documented at [`docs/THREAT_MODEL.md`](THREAT_MODEL.md). It covers the Internet → Node API, LAN Mesh, Wasm Executor, Payment Processors, IPFS, Mobile App, and OPA Policy Engine trust boundaries and is updated quarterly or within 30 days of any major architectural change.
 
 ---
 

@@ -26,9 +26,10 @@ type LightningProcessor struct {
 
 // NewLightningProcessor creates a new Bitcoin Lightning payment processor.
 // tlsCertPath is the path to LND's tls.cert file for certificate pinning.
-// When provided, the cert is loaded into a dedicated pool and InsecureSkipVerify
-// is disabled.  When empty, a warning is logged and verification is skipped
-// (acceptable for local dev, not for production).
+// When provided the cert is loaded into a dedicated pool. When empty or
+// unreadable the system CA pool is used, which will reject LND's self-signed
+// cert. Call validateConfig (via app.Start) before constructing a processor —
+// it enforces that tlsCertPath is present and readable (T-015).
 func NewLightningProcessor(lndHost, macaroon, tlsCertPath string) *LightningProcessor {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 
@@ -40,12 +41,21 @@ func NewLightningProcessor(lndHost, macaroon, tlsCertPath string) *LightningProc
 			tlsConfig.RootCAs = pool
 			log.Printf("[lightning] TLS certificate pinned from %s", tlsCertPath)
 		} else {
-			log.Printf("[lightning] WARNING: could not read TLS cert %s: %v — falling back to InsecureSkipVerify", tlsCertPath, err)
-			tlsConfig.InsecureSkipVerify = true // #nosec G402 -- cert file unreadable; operator should fix lnd_tls_cert_path
+			// validate.go verifies readability at startup; reaching here means the
+			// file was removed or permissions changed post-boot. Let TLS reject the
+			// connection via the system CA pool — LND's self-signed cert will not be
+			// trusted, which is far safer than skipping verification (T-015).
+			log.Printf("[lightning] ERROR: TLS cert %q no longer readable: %v — "+
+				"LND connection will be rejected by TLS (T-015)", tlsCertPath, err)
+			// tlsConfig.RootCAs remains nil → system CA pool → LND cert rejected.
 		}
 	} else {
-		log.Printf("[lightning] WARNING: lnd_tls_cert_path not configured — TLS verification disabled. Set this for production use!")
-		tlsConfig.InsecureSkipVerify = true // #nosec G402 -- no cert path provided; configure lnd_tls_cert_path in production
+		// validate.go makes lnd_tls_cert_path required when lnd_host is set.
+		// Reaching here means startup validation was bypassed. Let TLS fail
+		// naturally rather than skipping verification (T-015).
+		log.Printf("[lightning] ERROR: lnd_tls_cert_path is empty — TLS will reject " +
+			"the LND connection (T-015). Ensure validateConfig ran before NewLightningProcessor.")
+		// tlsConfig.RootCAs remains nil → system CA pool → LND cert rejected.
 	}
 
 	transport := &http.Transport{

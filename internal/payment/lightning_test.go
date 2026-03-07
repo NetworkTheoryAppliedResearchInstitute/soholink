@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+// newTestLightningProcessor creates a LightningProcessor pre-wired to the
+// given httptest.Server.  It uses server.Client() which already trusts the
+// test server's self-signed certificate — avoiding the need to write a cert
+// file to disk in every test.  For use in tests only.
+func newTestLightningProcessor(server *httptest.Server, macaroon string) *LightningProcessor {
+	host := strings.TrimPrefix(server.URL, "https://")
+	return &LightningProcessor{
+		lndHost:  host,
+		macaroon: macaroon,
+		client:   server.Client(),
+		online:   true,
+	}
+}
+
 // TestLightningProcessor_Name verifies the processor name.
 func TestLightningProcessor_Name(t *testing.T) {
 	p := NewLightningProcessor("localhost:8080", "macaroon_hex", "")
@@ -129,9 +143,7 @@ func TestLightningProcessor_CreateCharge(t *testing.T) {
 			}))
 			defer server.Close()
 
-			// Extract host from test server URL
-			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex", "")
+			p := newTestLightningProcessor(server, "macaroon_hex")
 
 			result, err := p.CreateCharge(context.Background(), tt.request)
 			if (err != nil) != tt.wantErr {
@@ -218,8 +230,7 @@ func TestLightningProcessor_ConfirmCharge(t *testing.T) {
 			}))
 			defer server.Close()
 
-			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex", "")
+			p := newTestLightningProcessor(server, "macaroon_hex")
 
 			err := p.ConfirmCharge(context.Background(), tt.chargeID)
 			if (err != nil) != tt.wantErr {
@@ -314,8 +325,7 @@ func TestLightningProcessor_GetChargeStatus(t *testing.T) {
 			}))
 			defer server.Close()
 
-			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex", "")
+			p := newTestLightningProcessor(server, "macaroon_hex")
 
 			status, err := p.GetChargeStatus(context.Background(), tt.chargeID)
 			if (err != nil) != tt.wantErr {
@@ -434,8 +444,7 @@ func TestLightningProcessor_ListCharges(t *testing.T) {
 			}))
 			defer server.Close()
 
-			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex", "")
+			p := newTestLightningProcessor(server, "macaroon_hex")
 
 			charges, err := p.ListCharges(context.Background(), tt.filter)
 			if (err != nil) != tt.wantErr {
@@ -519,8 +528,7 @@ func TestLightningProcessor_RefundCharge(t *testing.T) {
 			}))
 			defer server.Close()
 
-			host := strings.TrimPrefix(server.URL, "https://")
-			p := NewLightningProcessor(host, "macaroon_hex", "")
+			p := newTestLightningProcessor(server, "macaroon_hex")
 
 			err := p.RefundCharge(context.Background(), tt.chargeID, tt.reason)
 			if (err != nil) != tt.wantErr {
@@ -592,8 +600,7 @@ func TestLightningProcessor_DoLNDRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	host := strings.TrimPrefix(server.URL, "https://")
-	p := NewLightningProcessor(host, "test_macaroon", "")
+	p := newTestLightningProcessor(server, "test_macaroon")
 
 	body, err := p.doLNDRequest(context.Background(), http.MethodGet, "/test", nil)
 	if err != nil {

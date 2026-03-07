@@ -14,6 +14,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	golang.org/x/crypto v0.47.0
 	golang.org/x/mod v0.31.0
+	golang.org/x/net v0.49.0
 	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
 	layeh.com/radius v0.0.0-20231213012653-1006025d24f8
@@ -113,7 +114,6 @@ require (
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/image v0.18.0 // indirect
 	golang.org/x/mobile v0.0.0-20231127183840-76ac6878050a // indirect
-	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

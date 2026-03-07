@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -44,7 +45,8 @@ type AnnounceRequest struct {
 	Resources           NodeResources `json:"resources"`
 	PricePerCPUHourSats int64         `json:"price_per_cpu_hour_sats"`
 	Timestamp           string        `json:"timestamp"`    // RFC3339 UTC
-	Signature           string        `json:"signature"`    // base64 Ed25519 sig
+	Nonce               string        `json:"nonce"`        // 16-byte hex random — prevents replay beyond timestamp window (T-007)
+	Signature           string        `json:"signature"`    // base64 Ed25519 sig over "nodeDID:address:timestamp:nonce"
 }
 
 // HeartbeatRequest is the payload sent to POST /api/federation/heartbeat.
@@ -52,7 +54,8 @@ type HeartbeatRequest struct {
 	NodeDID   string        `json:"node_did"`
 	Resources NodeResources `json:"resources"`
 	Timestamp string        `json:"timestamp"`
-	Signature string        `json:"signature"`
+	Nonce     string        `json:"nonce"`     // 16-byte hex random — prevents replay (T-007)
+	Signature string        `json:"signature"` // base64 Ed25519 sig over "nodeDID:timestamp:nonce"
 }
 
 // Announcer manages the provider side of federation: announces the node to
@@ -137,6 +140,11 @@ func (a *Announcer) announce(ctx context.Context) error {
 	ts := time.Now().UTC().Format(time.RFC3339)
 	res := a.resourcesFn()
 
+	nonce, err := generateNonce()
+	if err != nil {
+		return fmt.Errorf("announce nonce: %w", err)
+	}
+
 	req := AnnounceRequest{
 		NodeDID:             a.nodeDID,
 		PublicKey:           a.pubKeyB64,
@@ -145,10 +153,13 @@ func (a *Announcer) announce(ctx context.Context) error {
 		Resources:           res,
 		PricePerCPUHourSats: a.pricePerCPUHourSats,
 		Timestamp:           ts,
+		Nonce:               nonce,
 	}
 
-	// Sign the canonical message: "{nodeDID}:{address}:{timestamp}"
-	msg := fmt.Sprintf("%s:%s:%s", a.nodeDID, a.address, ts)
+	// Sign the canonical message: "{nodeDID}:{address}:{timestamp}:{nonce}"
+	// Including the nonce in the signed payload prevents replay attacks beyond
+	// the 30-second timestamp window (T-007).
+	msg := fmt.Sprintf("%s:%s:%s:%s", a.nodeDID, a.address, ts, nonce)
 	sig, err := a.sign(msg)
 	if err != nil {
 		return fmt.Errorf("announce sign: %w", err)
@@ -163,12 +174,19 @@ func (a *Announcer) heartbeat(ctx context.Context) error {
 	ts := time.Now().UTC().Format(time.RFC3339)
 	res := a.resourcesFn()
 
+	nonce, err := generateNonce()
+	if err != nil {
+		return fmt.Errorf("heartbeat nonce: %w", err)
+	}
+
 	req := HeartbeatRequest{
 		NodeDID:   a.nodeDID,
 		Resources: res,
 		Timestamp: ts,
+		Nonce:     nonce,
 	}
-	msg := fmt.Sprintf("%s:%s", a.nodeDID, ts)
+	// Sign: "{nodeDID}:{timestamp}:{nonce}"
+	msg := fmt.Sprintf("%s:%s:%s", a.nodeDID, ts, nonce)
 	sig, err := a.sign(msg)
 	if err != nil {
 		return fmt.Errorf("heartbeat sign: %w", err)
@@ -176,6 +194,17 @@ func (a *Announcer) heartbeat(ctx context.Context) error {
 	req.Signature = sig
 
 	return a.post(ctx, "/api/federation/heartbeat", req)
+}
+
+// generateNonce returns a 16-byte random value encoded as a lowercase hex
+// string.  Nonces are included in the signed announce/heartbeat payloads to
+// prevent replay attacks beyond the timestamp anti-replay window (T-007).
+func generateNonce() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("rand.Read: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // deregister notifies the coordinator that this node is going offline.

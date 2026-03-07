@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/netutil"
+
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/governance"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/lbtas"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/moderation"
@@ -20,6 +22,19 @@ import (
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/services"
 	"github.com/NetworkTheoryAppliedResearchInstitute/soholink/internal/store"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+const (
+	// maxConnections caps the number of concurrent TCP connections accepted
+	// by the API server.  Connections beyond this limit are held in the OS
+	// accept queue until a slot frees up — preventing goroutine exhaustion
+	// under connection-flood DoS attacks (T-003).
+	maxConnections = 1000
+
+	// maxWorkloadQueue limits the number of workload submissions being
+	// processed concurrently.  Requests beyond the limit receive 503 so
+	// clients can back off and retry rather than pile up indefinitely (T-003).
+	maxWorkloadQueue = 50
 )
 
 // ---------------------------------------------------------------------------
@@ -96,6 +111,7 @@ type Server struct {
 	safetyPolicy   *moderation.SafetyPolicy    // optional — nil = no OPA policy check
 	listenAddr     string
 	server         *http.Server
+	workloadSem    chan struct{}        // S1-3: limits concurrent workload submissions (T-003)
 	// Network security settings (set via Set* methods before Start).
 	tlsCertFile         string   // path to PEM TLS certificate
 	tlsKeyFile          string   // path to PEM TLS private key
@@ -114,6 +130,7 @@ func NewServer(s *store.Store, lm *lbtas.Manager, listenAddr string) *Server {
 		lbtas:       lm,
 		listenAddr:  listenAddr,
 		rateLimiter: newIPRateLimiter(),
+		workloadSem: make(chan struct{}, maxWorkloadQueue),
 	}
 }
 
@@ -310,8 +327,13 @@ func (s *Server) Start(ctx context.Context) error {
 	s.setupAdminRoutes(mux)
 
 	s.server = &http.Server{
-		Addr:           s.listenAddr,
-		Handler:        metricsMiddleware(limitBodySize(s.authMiddleware(mux))), // instrument → cap bodies → check auth
+		Addr: s.listenAddr,
+		// errorScrubMiddleware (outermost) prevents 5xx bodies from leaking
+		// internal errors to clients (T-005).
+		// metricsMiddleware instruments all requests for Prometheus.
+		// limitBodySize caps request bodies at 4 MB (DoS protection).
+		// authMiddleware enforces device token authentication.
+		Handler:        errorScrubMiddleware(metricsMiddleware(limitBodySize(s.authMiddleware(mux)))),
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   60 * time.Second,
 		IdleTimeout:    120 * time.Second,
@@ -323,16 +345,24 @@ func (s *Server) Start(ctx context.Context) error {
 		s.server.Shutdown(context.Background()) // nolint:errcheck
 	}()
 
+	// Create the TCP listener explicitly so we can cap concurrent connections
+	// with netutil.LimitListener (T-003: API goroutine exhaustion DoS).
+	ln, err := net.Listen("tcp", s.listenAddr)
+	if err != nil {
+		return fmt.Errorf("API server: listen %s: %w", s.listenAddr, err)
+	}
+	ln = netutil.LimitListener(ln, maxConnections)
+
 	if s.tlsCertFile != "" && s.tlsKeyFile != "" {
-		log.Printf("[httpapi] TLS enabled; API server listening on %s", s.listenAddr)
-		if err := s.server.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile); err != http.ErrServerClosed {
+		log.Printf("[httpapi] TLS enabled; API server listening on %s (max %d connections)", s.listenAddr, maxConnections)
+		if err := s.server.ServeTLS(ln, s.tlsCertFile, s.tlsKeyFile); err != http.ErrServerClosed {
 			return fmt.Errorf("API server TLS error: %w", err)
 		}
 		return nil
 	}
 	log.Printf("[httpapi] WARNING: TLS disabled — set tls_cert_file/tls_key_file for production")
-	log.Printf("[httpapi] API server listening on %s", s.listenAddr)
-	if err := s.server.ListenAndServe(); err != http.ErrServerClosed {
+	log.Printf("[httpapi] API server listening on %s (max %d connections)", s.listenAddr, maxConnections)
+	if err := s.server.Serve(ln); err != http.ErrServerClosed {
 		return fmt.Errorf("API server error: %w", err)
 	}
 	return nil
@@ -561,6 +591,18 @@ func (s *Server) handleSubmitWorkload(w http.ResponseWriter, r *http.Request) {
 
 	if s.scheduler == nil {
 		http.Error(w, "Orchestration scheduler not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// S1-3: Workload queue depth cap — prevent unbounded goroutine accumulation
+	// when many submissions arrive simultaneously (T-003).
+	select {
+	case s.workloadSem <- struct{}{}:
+		defer func() { <-s.workloadSem }()
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"error":"server_busy","message":"workload queue is full — retry after a moment"}`)
 		return
 	}
 

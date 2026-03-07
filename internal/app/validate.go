@@ -50,9 +50,21 @@ func (a *App) validateConfig() error {
 				log.Printf("[WARN] Stripe processor configured but $%s is not set. Stripe charges will fail.", p.SecretKeyEnv)
 			}
 		}
-		// 4. Lightning processor has no TLS cert path.
-		if p.Type == "lightning" && p.LNDTLSCertPath == "" && p.LNDHost != "" {
-			log.Printf("[WARN] Lightning processor (lnd_host=%s) has no lnd_tls_cert_path — TLS verification is disabled. Configure cert pinning for production.", p.LNDHost)
+		// 4. Lightning processor must have a readable TLS cert path (T-015).
+		//    Without cert pinning the LND gRPC connection is vulnerable to MITM
+		//    attacks that can redirect or block Lightning payment settlement.
+		if p.Type == "lightning" && p.LNDHost != "" {
+			if p.LNDTLSCertPath == "" {
+				return fmt.Errorf("T-015: lnd_tls_cert_path is required for Lightning "+
+					"processor (lnd_host=%s) — set payment.processors[].lnd_tls_cert_path "+
+					"to your LND tls.cert file path to prevent MITM on payment settlement",
+					p.LNDHost)
+			}
+			if _, statErr := os.Stat(p.LNDTLSCertPath); statErr != nil {
+				return fmt.Errorf("T-015: lnd_tls_cert_path %q is not readable: %w — "+
+					"verify the file exists and is accessible to the soholink process",
+					p.LNDTLSCertPath, statErr)
+			}
 		}
 	}
 
