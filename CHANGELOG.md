@@ -13,6 +13,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.2] — 2026-03-08
 
+### Fixed — Windows ICO Generator (commit `72c9b4d`)
+
+The embedded `IcoWriter` C# class in `scripts/update-icon.ps1` was producing a
+malformed `.ico` file. Each directory entry was 24 bytes instead of the required 16,
+corrupting width/height/bpp readings for every image slot.
+
+**Root cause:** `hdr = new byte[16]` (only 8 bytes populated) was written in full,
+making each entry `16 (hdr) + 4 (size) + 4 (offset) = 24 bytes` instead of
+`8 (hdr) + 4 (size) + 4 (offset) = 16 bytes`.
+
+**Fix:** Changed to `hdr = new byte[8]`, restoring spec-correct 16-byte entries.
+
+**Additional improvements in this pass:**
+- Size set expanded from 4 → 9: `16, 20, 24, 32, 40, 48, 64, 96, 256 px` for full
+  Windows DPI coverage from 100% through 300%+ scaling
+- Created `assets/logo.png` at 1024×1024 (was missing; required by `FyneApp.toml`)
+- Bumped `FyneApp.toml` `Version` field from `0.1.0` to `0.1.2`
+- Script default params updated to reflect current build: `v0.1.2 / 37a0756 / 2026-03-08`
+- `soholink.exe` rebuilt with the clean 9-size ICO embedded
+
+**Verified output (PowerShell ICO inspector):**
+```
+[0]  16x16   32bpp    1064 bytes
+[1]  20x20   32bpp    1640 bytes
+[2]  24x24   32bpp    2344 bytes
+[3]  32x32   32bpp    4136 bytes
+[4]  40x40   32bpp    6440 bytes
+[5]  48x48   32bpp    9256 bytes
+[6]  64x64   32bpp   16424 bytes
+[7]  96x96   32bpp   36904 bytes
+[8] 256x256  32bpp   56967 bytes  (PNG-in-ICO)
+```
+
+**Modified files:** `scripts/update-icon.ps1`, `assets/soholink.ico`, `assets/logo.png`,
+`FyneApp.toml`
+
+---
+
 ### Added — Federation & Marketplace Settings Dialog
 
 The GUI dashboard now exposes all federation and marketplace configuration through a new
